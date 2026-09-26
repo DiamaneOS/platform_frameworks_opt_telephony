@@ -3419,4 +3419,22 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
         // Verify we NEVER triggered GsmCdmaCallTracker.acceptCall
         verify(mCT, never()).acceptCall();
     }
+
+    // DiamaneOS: network-state poll coalescing.
+    @Test
+    @SmallTest
+    public void testNotifyDeviceIdleStateChangedFlushesNetworkStatePoll() throws Exception {
+        replaceInstance(Phone.class, "mSignalStrengthController", mPhoneUT,
+                mSignalStrengthController);
+        clearInvocations(mSST);
+
+        mPhoneUT.notifyDeviceIdleStateChanged(false);
+        verify(mSST).flushNetworkStatePoll();
+        verify(mSignalStrengthController).onDeviceIdleStateChanged(false);
+
+        clearInvocations(mSST);
+        mPhoneUT.notifyDeviceIdleStateChanged(true);
+        verify(mSST, never()).flushNetworkStatePoll();
+        verify(mSignalStrengthController).onDeviceIdleStateChanged(true);
+    }
 }
