@@ -4602,6 +4602,9 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      * @param isIdle true if the new state is idle
      */
     public void notifyDeviceIdleStateChanged(boolean isIdle) {
+        // DiamaneOS: poll a coalesced network-state report as soon as the device leaves idle.
+        ServiceStateTracker sst = getServiceStateTracker();
+        if (!isIdle && sst != null) sst.flushNetworkStatePoll();
         SignalStrengthController ssc = getSignalStrengthController();
         if (ssc == null) {
             Rlog.e(mLogTag, "notifyDeviceIdleStateChanged: SignalStrengthController is null");
