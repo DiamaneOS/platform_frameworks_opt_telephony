@@ -25,6 +25,7 @@ import static com.android.internal.telephony.uicc.IccRecords.CARRIER_NAME_DISPLA
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.compat.annotation.UnsupportedAppUsage;
@@ -699,6 +700,8 @@ public class ServiceStateTracker extends Handler {
         mOutOfServiceSS = new ServiceState();
         mOutOfServiceSS.setOutOfService(false);
 
+        setNetworkStatePollWindowMs(SystemProperties.getInt(PROP_NETWORK_STATE_POLL_WINDOW_MS, 0));
+        mAlarmManager = phone.getContext().getSystemService(AlarmManager.class);
         for (int transportType : mAccessNetworksManager.getAvailableTransports()) {
             mRegStateManagers.append(transportType, new NetworkRegistrationManager(
                     transportType, phone));
@@ -901,6 +904,7 @@ public class ServiceStateTracker extends Handler {
             mAccessNetworksManager.unregisterCallback(mAccessNetworksManagerCallback);
             mAccessNetworksManagerCallback = null;
         }
+        clearPendingNetworkStatePoll();
     }
 
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
@@ -1328,7 +1332,7 @@ public class ServiceStateTracker extends Handler {
                 break;
 
             case EVENT_NETWORK_STATE_CHANGED:
-                pollStateInternal(true);
+                onNetworkStateChanged(); // DiamaneOS: polls now, or batches reports while idle
                 break;
 
             case EVENT_GET_LOC_DONE:
@@ -2744,7 +2748,116 @@ public class ServiceStateTracker extends Handler {
         sendEmptyMessage(EVENT_POLL_STATE_REQUEST);
     }
 
+    // DiamaneOS: network-state poll coalescing.
+    // Some modems report networkStateChanged many times a minute while idle without any
+    // registration change, and each report costs a four-request poll that keeps the AP awake.
+    // With ro.telephony.network_state_poll_window_ms = W > 0, a report while the device is idle
+    // and in service, with the SIM ready and no call or emergency mode on any SIM, polls at once
+    // and opens a window of W. Reports in the window wait for the first report after it, which
+    // polls, or for a backstop alarm 2W after the first of them, so every report is polled
+    // within 2W. The alarm is late on purpose: the kernel will not suspend within 2 s of a
+    // wakeup alarm and holds the AP awake instead. Anything else polls at once, as upstream.
+    private static final String PROP_NETWORK_STATE_POLL_WINDOW_MS =
+            "ro.telephony.network_state_poll_window_ms";
+    private static final int MAX_NETWORK_STATE_POLL_WINDOW_MS = 15000;
+    @VisibleForTesting
+    public static final String NETWORK_STATE_POLL_ALARM_TAG = "SST.networkStatePoll";
+    private int mNetworkStatePollWindowMs;
+    private final AlarmManager mAlarmManager;
+    /** elapsedRealtime at which the current window ends; 0 when no window is open. */
+    @VisibleForTesting
+    public long mNetworkStatePollWindowEndMs;
+    private boolean mNetworkStatePollPending;
+    private int mNetworkStateReportsCoalesced;
+    private int mNetworkStateBackstopPolls;
+    @VisibleForTesting
+    public final AlarmManager.OnAlarmListener mNetworkStatePollAlarm =
+            this::onNetworkStatePollBackstop;
+
+    private void onNetworkStateChanged() {
+        if (!canCoalesceNetworkStatePoll()) {
+            mNetworkStatePollWindowEndMs = 0; // the next idle report polls at once
+            pollStateInternal(true);
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (now < mNetworkStatePollWindowEndMs) {
+            mNetworkStateReportsCoalesced++;
+            if (!mNetworkStatePollPending) {
+                mNetworkStatePollPending = true;
+                // Wakeup alarm: suspend cannot stretch the delay and Doze does not defer it.
+                mAlarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        now + 2L * mNetworkStatePollWindowMs,
+                        NETWORK_STATE_POLL_ALARM_TAG + mPhone.getPhoneId(),
+                        mNetworkStatePollAlarm, this);
+            }
+            return;
+        }
+        pollStateInternal(true); // also answers the reports that waited in the last window
+        mNetworkStatePollWindowEndMs = now + mNetworkStatePollWindowMs;
+    }
+
+    private void onNetworkStatePollBackstop() {
+        if (!mNetworkStatePollPending) return;
+        mNetworkStatePollPending = false; // this alarm has fired
+        mNetworkStateBackstopPolls++;
+        pollStateInternal(true);
+        mNetworkStatePollWindowEndMs = canCoalesceNetworkStatePoll()
+                ? SystemClock.elapsedRealtime() + mNetworkStatePollWindowMs : 0;
+    }
+
+    /** Polls a waiting report now and closes the window. Called when the device leaves idle. */
+    public void flushNetworkStatePoll() {
+        if (mNetworkStatePollWindowMs <= 0) return;
+        post(() -> {
+            mNetworkStatePollWindowEndMs = 0;
+            if (mNetworkStatePollPending) pollStateInternal(true);
+        });
+    }
+
+    /** Any poll answers a waiting report, so its backstop alarm is no longer needed. */
+    private void clearPendingNetworkStatePoll() {
+        if (!mNetworkStatePollPending) return;
+        mNetworkStatePollPending = false;
+        mAlarmManager.cancel(mNetworkStatePollAlarm);
+    }
+
+    private boolean canCoalesceNetworkStatePoll() {
+        if (mNetworkStatePollWindowMs <= 0) return false;
+        // SIM ready, radio on and meant to stay on, and the last poll found full terrestrial
+        // service.
+        if (!mIsSimReady || !mDesiredPowerState
+                || mCi.getRadioState() != TelephonyManager.RADIO_POWER_ON
+                || mSS.getState() != ServiceState.STATE_IN_SERVICE
+                || mSS.getDataRegistrationState() != ServiceState.STATE_IN_SERVICE
+                || mSS.isEmergencyOnly() || mSS.isUsingNonTerrestrialNetwork()) {
+            return false;
+        }
+        // No call in any state (CS or IMS), ECBM or emergency SMS mode on any SIM.
+        for (Phone phone : PhoneFactory.getPhones()) {
+            if (phone.getState() != PhoneConstants.State.IDLE || phone.isInEcm()
+                    || phone.isInEmergencySmsMode()) {
+                return false;
+            }
+        }
+        if (DomainSelectionResolver.getInstance().isDomainSelectionSupported()) {
+            EmergencyStateTracker est = EmergencyStateTracker.getInstance();
+            if (est.isInEmergencyMode() || est.isInEmergencyCall() || est.isInScbm()) {
+                return false;
+            }
+        }
+        // Screen off, not charging, no tethering or Android Auto (DeviceStateMonitor).
+        return mPhone.isDeviceIdle();
+    }
+
+    @VisibleForTesting
+    public void setNetworkStatePollWindowMs(int windowMs) {
+        mNetworkStatePollWindowMs =
+                Math.max(0, Math.min(windowMs, MAX_NETWORK_STATE_POLL_WINDOW_MS));
+    }
+
     private void pollStateInternal(boolean modemTriggered) {
+        clearPendingNetworkStatePoll(); // DiamaneOS: any poll answers a waiting report
         mPollingContext = new int[1];
 
         log("pollState: modemTriggered=" + modemTriggered + ", radioState=" + mCi.getRadioState());
@@ -4421,6 +4534,10 @@ public class ServiceStateTracker extends Handler {
         pw.println(" mRestrictedState=" + mRestrictedState);
         pw.println(" mPollingContext=" + Arrays.toString(mPollingContext));
         pw.println(" mDesiredPowerState=" + mDesiredPowerState);
+        pw.println(" mNetworkStatePollWindowMs=" + mNetworkStatePollWindowMs
+                + " pending=" + mNetworkStatePollPending
+                + " coalesced=" + mNetworkStateReportsCoalesced
+                + " backstopPolls=" + mNetworkStateBackstopPolls);
         pw.println(" mRestrictedState=" + mRestrictedState);
         pw.println(" mPendingRadioPowerOffAfterDataOff=" + mPendingRadioPowerOffAfterDataOff);
         pw.println(" mPendingRadioPowerOffReason=" + DataNetwork.tearDownReasonToString(

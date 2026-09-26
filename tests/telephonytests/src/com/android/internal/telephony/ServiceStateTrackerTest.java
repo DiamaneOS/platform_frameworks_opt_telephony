@@ -41,6 +41,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.content.ComponentName;
@@ -115,6 +116,8 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -3639,4 +3642,506 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_PLMN)).isTrue();
     }
 
+    // DiamaneOS: network-state poll coalescing.
+
+    private static final int NETWORK_STATE_POLL_WINDOW_MS = 5000;
+    private static final String NETWORK_STATE_POLL_ALARM_TAG =
+            ServiceStateTracker.NETWORK_STATE_POLL_ALARM_TAG + PHONE_ID;
+
+    private AlarmManager mAlarmManager;
+
+    /** Radio on, SIM ready, the last poll in full service, device idle, no call on this phone. */
+    private void setUpIdleInService() {
+        sst.setRadioPower(true);
+        processAllMessages();
+        sst.sendEmptyMessage(ServiceStateTracker.EVENT_SIM_READY); // also polls
+        processAllMessages();
+        assertEquals(ServiceState.STATE_IN_SERVICE, sst.mSS.getState());
+        assertEquals(ServiceState.STATE_IN_SERVICE, sst.mSS.getDataRegistrationState());
+        doReturn(true).when(mPhone).isDeviceIdle();
+        doReturn(PhoneConstants.State.IDLE).when(mPhone).getState();
+        mAlarmManager = mContext.getSystemService(AlarmManager.class);
+        clearInvocations(mAlarmManager);
+    }
+
+    private void enableNetworkStatePollCoalescing() {
+        setUpIdleInService();
+        sst.setNetworkStatePollWindowMs(NETWORK_STATE_POLL_WINDOW_MS);
+    }
+
+    private void reportNetworkStateChanged() {
+        mSimulatedCommands.notifyNetworkStateChanged();
+        processAllMessages();
+    }
+
+    /** One getOperator request per poll. */
+    private int polls() {
+        return mSimulatedCommands.getGetOperatorCallCount();
+    }
+
+    private void fireNetworkStatePollAlarm() {
+        sst.mNetworkStatePollAlarm.onAlarm();
+        processAllMessages();
+    }
+
+    private void expireNetworkStatePollWindow() {
+        sst.mNetworkStatePollWindowEndMs = SystemClock.elapsedRealtime() - 1;
+    }
+
+    private void verifyNoNetworkStatePollAlarmSet() {
+        verify(mAlarmManager, never()).setExact(anyInt(), anyLong(),
+                eq(NETWORK_STATE_POLL_ALARM_TAG), any(), any());
+    }
+
+    /** A report that polls at once and opens a window. */
+    private void openNetworkStatePollWindow() {
+        int polls = polls();
+        reportNetworkStateChanged();
+        assertEquals(polls + 1, polls());
+        assertTrue(sst.mNetworkStatePollWindowEndMs > SystemClock.elapsedRealtime());
+    }
+
+    /** The first report in a window waits and sets one backstop wakeup alarm 2W after it. */
+    private void reportHeldWithBackstopAlarm() {
+        clearInvocations(mAlarmManager);
+        int polls = polls();
+        long before = SystemClock.elapsedRealtime();
+        reportNetworkStateChanged();
+        long after = SystemClock.elapsedRealtime();
+        assertEquals(polls, polls());
+        ArgumentCaptor<Long> triggerAt = ArgumentCaptor.forClass(Long.class);
+        verify(mAlarmManager).setExact(eq(AlarmManager.ELAPSED_REALTIME_WAKEUP),
+                triggerAt.capture(), eq(NETWORK_STATE_POLL_ALARM_TAG),
+                eq(sst.mNetworkStatePollAlarm), eq(sst));
+        assertTrue(triggerAt.getValue() >= before + 2L * NETWORK_STATE_POLL_WINDOW_MS);
+        assertTrue(triggerAt.getValue() <= after + 2L * NETWORK_STATE_POLL_WINDOW_MS);
+    }
+
+    /** Each report polls at once, no backstop alarm is set and the window is closed. */
+    private void assertReportsPollAtOnce(int reports) {
+        clearInvocations(mAlarmManager);
+        for (int i = 0; i < reports; i++) {
+            int polls = polls();
+            reportNetworkStateChanged();
+            assertEquals(polls + 1, polls());
+        }
+        verifyNoNetworkStatePollAlarmSet();
+        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+    }
+
+    private String dumpSst() {
+        StringWriter sw = new StringWriter();
+        sst.dump(null, new PrintWriter(sw), null);
+        return sw.toString();
+    }
+
+    @Test
+    public void testNetworkStatePollWindowOff_everyReportPolls() {
+        setUpIdleInService();
+        sst.setNetworkStatePollWindowMs(0); // as with the property unset
+
+        assertReportsPollAtOnce(5);
+        verify(mAlarmManager, never()).cancel(sst.mNetworkStatePollAlarm);
+    }
+
+    @Test
+    public void testNetworkStatePollCoalescedWhileIdle() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        final int polls = polls();
+        final int voice = mSimulatedCommands.getGetVoiceRegistrationStateCallCount();
+        final int data = mSimulatedCommands.getGetDataRegistrationStateCallCount();
+        final int selection = mSimulatedCommands.getGetNetworkSelectionModeCallCount();
+
+        reportHeldWithBackstopAlarm();
+        for (int i = 0; i < 4; i++) {
+            reportNetworkStateChanged();
+        }
+        assertEquals(polls, polls());
+        verify(mAlarmManager, times(1)).setExact(anyInt(), anyLong(),
+                eq(NETWORK_STATE_POLL_ALARM_TAG), any(), any());
+
+        // The first report after the window is one full poll for all of them and cancels the
+        // backstop alarm.
+        expireNetworkStatePollWindow();
+        reportNetworkStateChanged();
+        assertEquals(polls + 1, polls());
+        assertEquals(voice + 1, mSimulatedCommands.getGetVoiceRegistrationStateCallCount());
+        assertEquals(data + 1, mSimulatedCommands.getGetDataRegistrationStateCallCount());
+        assertEquals(selection + 1, mSimulatedCommands.getGetNetworkSelectionModeCallCount());
+        verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
+        assertTrue(sst.mNetworkStatePollWindowEndMs > SystemClock.elapsedRealtime());
+
+        // A late alarm does nothing.
+        fireNetworkStatePollAlarm();
+        assertEquals(polls + 1, polls());
+        assertThat(dumpSst()).contains("coalesced=5 backstopPolls=0");
+    }
+
+    @Test
+    public void testNetworkStatePollBackstopWhenReportsStop() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        final int polls = polls();
+        final int voice = mSimulatedCommands.getGetVoiceRegistrationStateCallCount();
+        final int data = mSimulatedCommands.getGetDataRegistrationStateCallCount();
+        final int selection = mSimulatedCommands.getGetNetworkSelectionModeCallCount();
+        reportHeldWithBackstopAlarm();
+        reportNetworkStateChanged();
+
+        // No report follows the window: the backstop alarm is one full poll.
+        fireNetworkStatePollAlarm();
+        assertEquals(polls + 1, polls());
+        assertEquals(voice + 1, mSimulatedCommands.getGetVoiceRegistrationStateCallCount());
+        assertEquals(data + 1, mSimulatedCommands.getGetDataRegistrationStateCallCount());
+        assertEquals(selection + 1, mSimulatedCommands.getGetNetworkSelectionModeCallCount());
+        fireNetworkStatePollAlarm();
+        assertEquals(polls + 1, polls());
+        assertThat(dumpSst()).contains("coalesced=2 backstopPolls=1");
+
+        // The backstop poll opened a new window.
+        reportHeldWithBackstopAlarm();
+        expireNetworkStatePollWindow();
+        reportNetworkStateChanged();
+        assertEquals(polls + 2, polls());
+    }
+
+    @Test
+    public void testNetworkStatePollBackstopWithGateClosedClosesWindow() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        reportHeldWithBackstopAlarm();
+        final int polls = polls();
+
+        // A call starts with the screen off and no report comes during it: the backstop polls
+        // and leaves the window closed, so the first idle report after the call polls at once.
+        doReturn(PhoneConstants.State.OFFHOOK).when(mPhone).getState();
+        fireNetworkStatePollAlarm();
+        assertEquals(polls + 1, polls());
+        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+
+        doReturn(PhoneConstants.State.IDLE).when(mPhone).getState();
+        openNetworkStatePollWindow();
+    }
+
+    @Test
+    public void testNetworkStatePollQuietWindowLapses() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        final int polls = polls();
+
+        fireNetworkStatePollAlarm();
+        assertEquals(polls, polls());
+        expireNetworkStatePollWindow();
+        openNetworkStatePollWindow();
+        verifyNoNetworkStatePollAlarmSet();
+    }
+
+    @Test
+    public void testNetworkStatePollWindowClamped() {
+        enableNetworkStatePollCoalescing();
+        sst.setNetworkStatePollWindowMs(600000);
+        openNetworkStatePollWindow();
+        assertTrue(sst.mNetworkStatePollWindowEndMs - SystemClock.elapsedRealtime() <= 15000);
+
+        sst.setNetworkStatePollWindowMs(-5);
+        assertReportsPollAtOnce(3);
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_deviceNotIdle() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        doReturn(false).when(mPhone).isDeviceIdle();
+
+        assertReportsPollAtOnce(3);
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_callOnThisPhone() {
+        enableNetworkStatePollCoalescing();
+        for (PhoneConstants.State state : new PhoneConstants.State[] {
+                PhoneConstants.State.OFFHOOK, PhoneConstants.State.RINGING, null}) {
+            doReturn(PhoneConstants.State.IDLE).when(mPhone).getState();
+            openNetworkStatePollWindow();
+            doReturn(state).when(mPhone).getState();
+
+            assertReportsPollAtOnce(3);
+        }
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_ecmOrEmergencySmsOnThisPhone() {
+        enableNetworkStatePollCoalescing();
+        List<Runnable> conditions = List.of(
+                () -> doReturn(true).when(mPhone).isInEcm(),
+                () -> doReturn(true).when(mPhone).isInEmergencySmsMode());
+        for (Runnable condition : conditions) {
+            doReturn(false).when(mPhone).isInEcm();
+            doReturn(false).when(mPhone).isInEmergencySmsMode();
+            openNetworkStatePollWindow();
+            condition.run();
+
+            assertReportsPollAtOnce(3);
+        }
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_otherPhoneBusy() throws Exception {
+        mPhones = new Phone[] {mPhone, mPhone2};
+        replaceInstance(PhoneFactory.class, "sPhones", null, mPhones);
+        enableNetworkStatePollCoalescing();
+        List<Runnable> conditions = List.of(
+                () -> doReturn(PhoneConstants.State.OFFHOOK).when(mPhone2).getState(),
+                () -> doReturn(true).when(mPhone2).isInEcm(),
+                () -> doReturn(true).when(mPhone2).isInEmergencySmsMode());
+        for (Runnable condition : conditions) {
+            doReturn(PhoneConstants.State.IDLE).when(mPhone2).getState();
+            doReturn(false).when(mPhone2).isInEcm();
+            doReturn(false).when(mPhone2).isInEmergencySmsMode();
+            openNetworkStatePollWindow();
+            condition.run();
+
+            assertReportsPollAtOnce(3);
+        }
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_simNotReady() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        // The SIM leaves READY (removed or failed) before the modem has deregistered.
+        doReturn(IccCardApplicationStatus.AppState.APPSTATE_DETECTED)
+                .when(mUiccCardApplication3gpp).getState();
+        sst.sendEmptyMessage(ServiceStateTracker.EVENT_ICC_CHANGED);
+        processAllMessages();
+        assertEquals(ServiceState.STATE_IN_SERVICE, sst.mSS.getState());
+
+        assertReportsPollAtOnce(3);
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_radioOff() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        sst.setRadioPower(false);
+        processAllMessages();
+        assertEquals(TelephonyManager.RADIO_POWER_OFF, mSimulatedCommands.getRadioState());
+
+        assertReportsPollAtOnce(3);
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_radioOffRequested() throws Exception {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        replaceInstance(ServiceStateTracker.class, "mDesiredPowerState", sst, false);
+        assertEquals(TelephonyManager.RADIO_POWER_ON, mSimulatedCommands.getRadioState());
+
+        assertReportsPollAtOnce(3);
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_radioUnavailable() throws Exception {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        // The modem restarts and a report is handled before the radio state change: the radio
+        // is still desired on and the last poll still in service.
+        replaceInstance(BaseCommands.class, "mState", mSimulatedCommands,
+                TelephonyManager.RADIO_POWER_UNAVAILABLE);
+        clearInvocations(mAlarmManager);
+
+        // The report polls at once; with the radio unavailable the poll sends no requests and
+        // sets the state out of service.
+        reportNetworkStateChanged();
+        assertEquals(ServiceState.STATE_OUT_OF_SERVICE, sst.mSS.getState());
+        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        verifyNoNetworkStatePollAlarmSet();
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_notInFullService() {
+        enableNetworkStatePollCoalescing();
+        NetworkRegistrationInfo ntn = new NetworkRegistrationInfo.Builder()
+                .setDomain(NetworkRegistrationInfo.DOMAIN_PS)
+                .setTransportType(AccessNetworkConstants.TRANSPORT_TYPE_WWAN)
+                .setRegistrationState(NetworkRegistrationInfo.REGISTRATION_STATE_HOME)
+                .setIsNonTerrestrialNetwork(true)
+                .build();
+        List<Runnable> conditions = List.of(
+                () -> sst.mSS.setVoiceRegState(ServiceState.STATE_OUT_OF_SERVICE),
+                () -> sst.mSS.setDataRegState(ServiceState.STATE_OUT_OF_SERVICE),
+                () -> sst.mSS.setEmergencyOnly(true),
+                () -> sst.mSS.addNetworkRegistrationInfo(ntn));
+        for (Runnable condition : conditions) {
+            openNetworkStatePollWindow();
+            condition.run();
+
+            // The poll that follows reads full service from the modem again, so one report.
+            assertReportsPollAtOnce(1);
+        }
+    }
+
+    @Test
+    public void testNetworkStatePollNotCoalesced_emergencyStateTracker() {
+        enableNetworkStatePollCoalescing();
+        doReturn(true).when(mDomainSelectionResolver).isDomainSelectionSupported();
+        List<Runnable> conditions = List.of(
+                () -> doReturn(true).when(mEmergencyStateTracker).isInEmergencyMode(),
+                () -> doReturn(true).when(mEmergencyStateTracker).isInEmergencyCall(),
+                () -> doReturn(true).when(mEmergencyStateTracker).isInScbm());
+        for (Runnable condition : conditions) {
+            doReturn(false).when(mEmergencyStateTracker).isInEmergencyMode();
+            doReturn(false).when(mEmergencyStateTracker).isInEmergencyCall();
+            doReturn(false).when(mEmergencyStateTracker).isInScbm();
+            openNetworkStatePollWindow();
+            condition.run();
+
+            assertReportsPollAtOnce(3);
+        }
+    }
+
+    @Test
+    public void testGateClosedReportResetsWindow() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        doReturn(PhoneConstants.State.OFFHOOK).when(mPhone).getState();
+        final int polls = polls();
+
+        reportNetworkStateChanged();
+        assertEquals(polls + 1, polls());
+        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+
+        // The first idle report after the call is a leading poll, not a coalesced one.
+        doReturn(PhoneConstants.State.IDLE).when(mPhone).getState();
+        openNetworkStatePollWindow();
+    }
+
+    @Test
+    public void testNetworkStateRecoveryNotDelayed() {
+        enableNetworkStatePollCoalescing();
+        mSimulatedCommands.setVoiceRegState(
+                NetworkRegistrationInfo.REGISTRATION_STATE_NOT_REGISTERED_SEARCHING);
+        mSimulatedCommands.setDataRegState(
+                NetworkRegistrationInfo.REGISTRATION_STATE_NOT_REGISTERED_SEARCHING);
+        openNetworkStatePollWindow();
+        assertEquals(ServiceState.STATE_OUT_OF_SERVICE, sst.mSS.getState());
+
+        // Out of service: every report polls.
+        assertReportsPollAtOnce(3);
+
+        sst.registerForNetworkAttached(mTestHandler, EVENT_REGISTERED_TO_NETWORK, null);
+        mSimulatedCommands.setVoiceRegState(NetworkRegistrationInfo.REGISTRATION_STATE_HOME);
+        mSimulatedCommands.setDataRegState(NetworkRegistrationInfo.REGISTRATION_STATE_HOME);
+        final int polls = polls();
+        reportNetworkStateChanged();
+        assertEquals(polls + 1, polls());
+        assertEquals(ServiceState.STATE_IN_SERVICE, sst.mSS.getState());
+        ArgumentCaptor<Message> messageArgumentCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(mTestHandler).sendMessageAtTime(messageArgumentCaptor.capture(), anyLong());
+        assertEquals(EVENT_REGISTERED_TO_NETWORK, messageArgumentCaptor.getValue().what);
+        verifyNoNetworkStatePollAlarmSet();
+    }
+
+    @Test
+    public void testNetworkStateLossBoundedByBackstop() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        final int polls = polls();
+
+        // A loss that starts inside the window waits, at most until the backstop alarm 2W
+        // after its report (reportHeldWithBackstopAlarm checks the alarm time).
+        mSimulatedCommands.setVoiceRegState(
+                NetworkRegistrationInfo.REGISTRATION_STATE_NOT_REGISTERED_SEARCHING);
+        mSimulatedCommands.setDataRegState(
+                NetworkRegistrationInfo.REGISTRATION_STATE_NOT_REGISTERED_SEARCHING);
+        reportHeldWithBackstopAlarm();
+        assertEquals(ServiceState.STATE_IN_SERVICE, sst.mSS.getState());
+
+        fireNetworkStatePollAlarm();
+        assertEquals(polls + 1, polls());
+        assertEquals(ServiceState.STATE_OUT_OF_SERVICE, sst.mSS.getState());
+
+        // Out of service closes the gate: the next report polls at once.
+        reportNetworkStateChanged();
+        assertEquals(polls + 2, polls());
+    }
+
+    @Test
+    public void testFlushNetworkStatePoll() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        reportNetworkStateChanged();
+        int polls = polls();
+
+        // A waiting report is polled at once.
+        sst.flushNetworkStatePoll();
+        processAllMessages();
+        assertEquals(polls + 1, polls());
+        verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
+        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        fireNetworkStatePollAlarm();
+        assertEquals(polls + 1, polls());
+
+        // Nothing waiting: no poll, but the window closes.
+        openNetworkStatePollWindow();
+        polls = polls();
+        sst.flushNetworkStatePoll();
+        processAllMessages();
+        assertEquals(polls, polls());
+        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        openNetworkStatePollWindow();
+
+        // Off: nothing happens.
+        sst.setNetworkStatePollWindowMs(0);
+        clearInvocations(mAlarmManager);
+        polls = polls();
+        sst.flushNetworkStatePoll();
+        processAllMessages();
+        assertEquals(polls, polls());
+        verify(mAlarmManager, never()).cancel(sst.mNetworkStatePollAlarm);
+        verifyNoNetworkStatePollAlarmSet();
+    }
+
+    @Test
+    public void testOtherPollAnswersPendingReport() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        List<Runnable> otherPolls = List.of(
+                () -> sst.pollState(),
+                () -> sendCarrierConfigUpdate(PHONE_ID),
+                () -> sst.sendMessage(
+                        sst.obtainMessage(ServiceStateTracker.EVENT_RADIO_STATE_CHANGED)));
+        for (Runnable otherPoll : otherPolls) {
+            reportNetworkStateChanged();
+            clearInvocations(mAlarmManager);
+            final int polls = polls();
+
+            otherPoll.run();
+            processAllMessages();
+            assertEquals(polls + 1, polls());
+            verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
+            fireNetworkStatePollAlarm();
+            assertEquals(polls + 1, polls());
+        }
+    }
+
+    @Test
+    public void testDisposeCancelsNetworkStatePollAlarm() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+        reportNetworkStateChanged();
+
+        sst.dispose();
+        verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
+    }
+
+    @Test
+    public void testDisposeWithoutPendingReportLeavesAlarmsAlone() {
+        enableNetworkStatePollCoalescing();
+        openNetworkStatePollWindow();
+
+        sst.dispose();
+        verify(mAlarmManager, never()).cancel(sst.mNetworkStatePollAlarm);
+    }
 }
