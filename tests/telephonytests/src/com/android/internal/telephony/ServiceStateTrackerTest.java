@@ -49,6 +49,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.ServiceInfo;
 import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
@@ -254,6 +255,18 @@ public class ServiceStateTrackerTest extends TelephonyTest {
                 "com.xyz.iwlan.networkservice");
 
         doReturn(mIwlanNetworkServiceStub).when(mIwlanNetworkServiceStub).asBinder();
+        // The registration manager accepts only system network-service packages.
+        // Describe these two simulated providers explicitly; do not bypass that check.
+        ApplicationInfo networkServiceInfo = new ApplicationInfo();
+        networkServiceInfo.flags = ApplicationInfo.FLAG_SYSTEM;
+        doReturn(networkServiceInfo).when(mPackageManager)
+                .getApplicationInfo("com.android.phone", 0);
+        doReturn(networkServiceInfo).when(mPackageManager)
+                .getApplicationInfo("com.xyz.iwlan.networkservice", 0);
+        mContextFixture.putResource(R.string.config_wwan_network_service_class,
+                "com.android.internal.telephony.CellularNetworkService");
+        mContextFixture.putResource(R.string.config_wlan_network_service_class,
+                "com.xyz.iwlan.IwlanNetworkService");
         addNetworkService();
 
         Field field = NetworkService.class.getDeclaredField("mHandlerThread");
