@@ -44,6 +44,7 @@ import static org.mockito.Mockito.when;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.ActivityManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.Uri;
@@ -527,7 +528,8 @@ public class SmsDispatchersControllerTest extends TelephonyTest {
     public void testSendImsGmsTestWithSmsc() {
         IccSmsInterfaceManager iccSmsInterfaceManager = Mockito.mock(IccSmsInterfaceManager.class);
         when(mPhone.getIccSmsInterfaceManager()).thenReturn(iccSmsInterfaceManager);
-        CallingPackage pkg = new CallingPackage(android.os.Process.myUid(), "com.android.messaging");
+        // SMSC lookup clears the sender identity and uses the phone process identity.
+        CallingPackage pkg = new CallingPackage(Process.myUid(), mContext.getPackageName());
         when(iccSmsInterfaceManager.getSmscAddressFromIccEf(pkg))
                 .thenReturn("222");
         switchImsSmsFormat(PhoneConstants.PHONE_TYPE_GSM);
@@ -641,6 +643,11 @@ public class SmsDispatchersControllerTest extends TelephonyTest {
     public void testSendTextForEmergencyWhenEmergencyStateTrackerReturnsFailure() throws Exception {
         setUpDomainSelectionConnection();
         setUpSmsDispatchers();
+        // PendingIntent is final. Supply its broadcast metadata through the
+        // existing mocked ActivityManager instead of querying a real service.
+        doReturn(new ActivityManager.PendingIntentInfo(mContext.getPackageName(),
+                Process.myUid(), false, ActivityManager.INTENT_SENDER_BROADCAST))
+                .when(mIActivityManager).getInfoForIntentSender(mSentIntent.getTarget());
         setUpEmergencyStateTracker(DisconnectCause.OUT_OF_SERVICE);
 
         mSmsDispatchersController.sendText("911", "2222", "text", mSentIntent, null, null,
