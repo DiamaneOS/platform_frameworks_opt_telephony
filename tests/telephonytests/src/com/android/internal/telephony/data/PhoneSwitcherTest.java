@@ -934,6 +934,11 @@ public class PhoneSwitcherTest extends TelephonyTest {
     public void testAutoDataSwitchPolicyChanged() throws Exception {
         initialize();
         setSlotIndexToSubId(0, 1);
+        // This policy applies to a standalone opportunistic subscription even
+        // when the device's non-standalone ADS feature is compiled out.
+        doReturn(true).when(mSubscriptionInfo).isOpportunistic();
+        doReturn(null).when(mSubscriptionInfo).getGroupUuid();
+        doReturn(mSubscriptionInfo).when(mSubscriptionManagerService).getSubscriptionInfo(1);
 
         mDataSettingsManagerCallbacks.get(0).onDataEnabledOverrideChanged(true,
                 TelephonyManager.MOBILE_DATA_POLICY_AUTO_DATA_SWITCH);
