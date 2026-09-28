@@ -44,6 +44,7 @@ import static org.mockito.Mockito.when;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.ActivityManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.Uri;
@@ -642,9 +643,11 @@ public class SmsDispatchersControllerTest extends TelephonyTest {
     public void testSendTextForEmergencyWhenEmergencyStateTrackerReturnsFailure() throws Exception {
         setUpDomainSelectionConnection();
         setUpSmsDispatchers();
-        // Keep the completion callback inside this mocked test process. A real
-        // PendingIntent queries ActivityManager metadata that this fixture mocks.
-        mSentIntent = Mockito.mock(PendingIntent.class);
+        // PendingIntent is final. Supply its broadcast metadata through the
+        // existing mocked ActivityManager instead of querying a real service.
+        doReturn(new ActivityManager.PendingIntentInfo(mContext.getPackageName(),
+                Process.myUid(), false, ActivityManager.INTENT_SENDER_BROADCAST))
+                .when(mIActivityManager).getInfoForIntentSender(mSentIntent.getTarget());
         setUpEmergencyStateTracker(DisconnectCause.OUT_OF_SERVICE);
 
         mSmsDispatchersController.sendText("911", "2222", "text", mSentIntent, null, null,
