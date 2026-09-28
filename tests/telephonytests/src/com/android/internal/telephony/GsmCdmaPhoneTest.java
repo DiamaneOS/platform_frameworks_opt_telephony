@@ -161,6 +161,13 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
         mMockCi = mock(CommandsInterface.class);
         adnRecordCache = mock(AdnRecordCache.class);
         mFeatureFlags = mock(FeatureFlags.class);
+        // Unit tests do not initialize PhoneFactory's radio-capability singleton.
+        RadioInterfaceCapabilityController radioController = mock(
+                RadioInterfaceCapabilityController.class);
+        doReturn(Collections.emptySet()).when(radioController).getCapabilities();
+        replaceInstance(RadioInterfaceCapabilityController.class, "sInstance", null,
+                radioController);
+
 
         doReturn(false).when(mSST).isDeviceShuttingDown();
         doReturn(true).when(mImsManager).isVolteEnabledByPlatform();
