@@ -55,6 +55,10 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.platform.test.annotations.RequiresFlagsDisabled;
+import android.platform.test.annotations.RequiresFlagsEnabled;
+import android.platform.test.flag.junit.CheckFlagsRule;
+import android.platform.test.flag.junit.DeviceFlagsValueProvider;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -99,6 +103,7 @@ import androidx.test.filters.SmallTest;
 import com.android.internal.telephony.domainselection.DomainSelectionResolver;
 import com.android.internal.telephony.emergency.EmergencyStateTracker;
 import com.android.internal.telephony.flags.FeatureFlags;
+import com.android.internal.telephony.flags.Flags;
 import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.imsphone.ImsPhoneCall;
 import com.android.internal.telephony.subscription.SubscriptionInfoInternal;
@@ -118,6 +123,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
+import org.junit.Rule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
@@ -134,6 +140,12 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(AndroidTestingRunner.class)
 @TestableLooper.RunWithLooper
 public class GsmCdmaPhoneTest extends TelephonyTest {
+    // Device tests use the optimized boot classpath. Mocking a flag cannot
+    // restore a branch removed from that image by read-only flag optimization.
+    @Rule
+    public final CheckFlagsRule mCheckFlagsRule =
+            DeviceFlagsValueProvider.createCheckFlagsRule();
+
     private static final String LOG_TAG = "GsmCdmaPhoneTest";
     private static final String TEST_EMERGENCY_NUMBER = "555";
     private static final int EVENT_SET_ICC_LOCK_ENABLED = 3;
@@ -2514,6 +2526,7 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
 
     @Test
     @SmallTest
+    @RequiresFlagsDisabled(Flags.FLAG_DELETE_CDMA)
     public void testEcbm() throws Exception {
         assertFalse(mPhoneUT.isInEcm());
 
@@ -3171,6 +3184,7 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
     }
 
     @Test
+    @RequiresFlagsDisabled(Flags.FLAG_KEY_CARRIER_2G_TOGGLE)
     public void testUpdateDefaultEnable2gSettings_disabledFlagKeyCarrier2gToggle()
             throws Exception {
         mPhoneUT.mCi = mMockCi;
@@ -3360,6 +3374,7 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
     }
 
     @Test
+    @RequiresFlagsEnabled(Flags.FLAG_OFFLOAD_STARTUP_BINDER_CALLS)
     public void testConstructor_offloadStartupBinderCalls_resourceTrue() throws Exception {
         mContextFixture.putBooleanResource(com.android.internal.R.bool.config_voice_capable, true);
         doReturn(true).when(mFeatureFlags).offloadStartupBinderCalls();
@@ -3376,6 +3391,7 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
     }
 
     @Test
+    @RequiresFlagsEnabled(Flags.FLAG_OFFLOAD_STARTUP_BINDER_CALLS)
     public void testConstructor_offloadStartupBinderCalls_resourceFalse() throws Exception {
         mContextFixture.putBooleanResource(com.android.internal.R.bool.config_voice_capable, false);
         doReturn(true).when(mFeatureFlags).offloadStartupBinderCalls();
@@ -3392,6 +3408,7 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
     }
 
     @Test
+    @RequiresFlagsDisabled(Flags.FLAG_OFFLOAD_STARTUP_BINDER_CALLS)
     public void testConstructor_noOffloadStartupBinderCalls() throws Exception {
         doReturn(false).when(mFeatureFlags).offloadStartupBinderCalls();
         doReturn(true).when(mTelephonyManager).isVoiceCapable();
