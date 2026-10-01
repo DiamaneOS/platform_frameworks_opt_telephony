@@ -1626,6 +1626,40 @@ public class RILTest extends TelephonyTest {
         assertEquals(expected, cil);
     }
 
+    @Test
+    public void testRegStateResultLogRedactsCellIdentity() {
+        android.hardware.radio.network.OperatorInfo operatorInfo =
+                new android.hardware.radio.network.OperatorInfo();
+        operatorInfo.alphaLong = ALPHA_LONG;
+        operatorInfo.alphaShort = ALPHA_SHORT;
+        operatorInfo.operatorNumeric = MCC_STR + MNC_STR;
+        android.hardware.radio.network.CellIdentityLte lte =
+                new android.hardware.radio.network.CellIdentityLte();
+        lte.mcc = MCC_STR;
+        lte.mnc = MNC_STR;
+        lte.ci = 123456789;
+        lte.pci = 321;
+        lte.tac = 54321;
+        lte.earfcn = 6300;
+        lte.operatorNames = operatorInfo;
+        lte.bandwidth = BANDWIDTH;
+        lte.additionalPlmns = new String[0];
+        lte.bands = new int[0];
+
+        android.hardware.radio.network.RegStateResult regResult =
+                new android.hardware.radio.network.RegStateResult();
+        regResult.regState = android.hardware.radio.network.RegState.REG_HOME;
+        regResult.rat = ServiceState.RIL_RADIO_TECHNOLOGY_LTE;
+        regResult.cellIdentity = android.hardware.radio.network.CellIdentity.lte(lte);
+        regResult.registeredPlmn = MCC_STR + MNC_STR;
+
+        String log = RILUtils.regStateResultToString(regResult);
+        assertTrue(log, log.contains("REG_HOME"));
+        assertTrue(log, log.contains("CellIdentityLte:{"));
+        assertFalse(log, log.contains("123456789"));
+        assertFalse(log, log.contains("54321"));
+    }
+
     private android.hardware.radio.V1_2.CellIdentityGsm getCellIdentityGsm_1_2() {
         android.hardware.radio.V1_0.CellIdentityGsm cellIdentity0 =
                 new android.hardware.radio.V1_0.CellIdentityGsm();

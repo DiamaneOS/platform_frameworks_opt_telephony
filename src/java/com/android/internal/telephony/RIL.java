@@ -5908,6 +5908,9 @@ public class RIL extends BaseCommands implements CommandsInterface {
             }
             sb.append("}");
             s = sb.toString();
+        } else if (ret instanceof android.hardware.radio.network.RegStateResult) {
+            s = RILUtils.regStateResultToString(
+                    (android.hardware.radio.network.RegStateResult) ret);
         } else {
             // Check if toString() was overridden. Java classes created from HIDL have a built-in
             // toString() method, but AIDL classes only have it if the parcelable contains a
