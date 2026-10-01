@@ -2673,6 +2673,23 @@ public class RILUtils {
     }
 
     /**
+     * Log form of a RegStateResult. Its own toString() prints the serving cell's identity in
+     * full; this prints the framework CellIdentity in its place, whose toString() redacts the
+     * cell, area and channel numbers with Rlog.pii(), as the service state logs already do.
+     * @param result RegStateResult defined in RegStateResult.aidl
+     * @return The RegStateResult as a String, with the cell identity redacted
+     */
+    public static String regStateResultToString(
+            android.hardware.radio.network.RegStateResult result) {
+        String s = result.toString();
+        if (result.cellIdentity == null) return s;
+        String raw = result.cellIdentity.toString();
+        String redacted = String.valueOf(convertHalCellIdentity(result.cellIdentity));
+        // Never fall back to the raw identity if the generated format changes.
+        return s.contains(raw) ? s.replace(raw, redacted) : "{cellIdentity=" + redacted + "}";
+    }
+
+    /**
      * Convert a CellIdentityGsm defined in radio/1.2, 1.5/types.hal to CellIdentityGsm
      * @param gsm CellIdentityGsm defined in radio/1.2, 1.5/types.hal
      * @return The converted CellIdentityGsm
