@@ -57,6 +57,7 @@ import com.android.internal.telephony.uicc.euicc.EuiccCardErrorException;
 import com.android.internal.telephony.uicc.euicc.EuiccPort;
 import com.android.internal.telephony.uicc.euicc.async.AsyncResultCallback;
 import com.android.internal.telephony.util.TelephonyUtils;
+import com.android.telephony.Rlog;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -222,11 +223,11 @@ public class EuiccCardController extends IEuiccCardController.Stub {
         int slotId = mUiccController.getUiccSlotForCardId(cardId);
         UiccSlot slot = mUiccController.getUiccSlot(slotId);
         if (slot == null) {
-            loge("UiccSlot is null. slotId : " + slotId + " cardId : " + cardId);
+            loge("UiccSlot is null. slotId : " + slotId + " cardId : " + Rlog.pii(TAG, cardId));
             return null;
         }
         if (!slot.isEuicc()) {
-            loge("UiccSlot is not embedded slot : " + slotId + " cardId : " + cardId);
+            loge("UiccSlot is not embedded slot : " + slotId + " cardId : " + Rlog.pii(TAG, cardId));
             return null;
         }
         return slot;
@@ -239,7 +240,7 @@ public class EuiccCardController extends IEuiccCardController.Stub {
         }
         UiccCard card = slot.getUiccCard();
         if (card == null) {
-            loge("UiccCard is null. cardId : " + cardId);
+            loge("UiccCard is null. cardId : " + Rlog.pii(TAG, cardId));
             return null;
         }
         return (EuiccCard) card;
@@ -252,13 +253,13 @@ public class EuiccCardController extends IEuiccCardController.Stub {
         }
         UiccCard card = slot.getUiccCard();
         if (card == null) {
-            loge("UiccCard is null. cardId : " + cardId);
+            loge("UiccCard is null. cardId : " + Rlog.pii(TAG, cardId));
             return null;
         }
         int portIndex = slot.getPortIndexFromIccId(iccid);
         UiccPort port = card.getUiccPort(portIndex);
         if (port == null) {
-            loge("UiccPort is null. cardId : " + cardId + " portIndex : " + portIndex);
+            loge("UiccPort is null. cardId : " + Rlog.pii(TAG, cardId) + " portIndex : " + portIndex);
             return null;
         }
         return (EuiccPort) port;
@@ -272,7 +273,7 @@ public class EuiccCardController extends IEuiccCardController.Stub {
         if (card.getUiccPortList().length > 0 ) {
             return (EuiccPort) card.getUiccPortList()[0]; // return first active port.
         }
-        loge("No active ports exists. cardId : " + cardId);
+        loge("No active ports exists. cardId : " + Rlog.pii(TAG, cardId));
         return null;
     }
 
@@ -283,7 +284,7 @@ public class EuiccCardController extends IEuiccCardController.Stub {
         }
         UiccPort port = card.getUiccPort(portIndex);
         if (port == null) {
-            loge("UiccPort is null. cardId : " + cardId + " portIndex : " + portIndex);
+            loge("UiccPort is null. cardId : " + Rlog.pii(TAG, cardId) + " portIndex : " + portIndex);
             return null;
         }
         return (EuiccPort) port;
