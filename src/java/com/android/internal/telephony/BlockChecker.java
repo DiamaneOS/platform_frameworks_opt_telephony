@@ -71,7 +71,8 @@ public class BlockChecker {
             blockStatus = BlockedNumberContract.SystemContract.shouldSystemBlockNumber(
                     context, phoneNumber, extras);
             if (blockStatus != BlockedNumberContract.STATUS_NOT_BLOCKED) {
-                Rlog.d(TAG, phoneNumber + " is blocked.");
+                // DiamaneOS: no phone number in the log (redacted unless PII logging is on).
+                Rlog.d(TAG, Rlog.pii(TAG, phoneNumber) + " is blocked.");
             }
         } catch (Exception e) {
             Rlog.e(TAG, "Exception checking for blocked number: " + e);
