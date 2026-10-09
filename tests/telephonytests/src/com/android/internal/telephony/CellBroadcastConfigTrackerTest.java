@@ -528,6 +528,98 @@ public final class CellBroadcastConfigTrackerTest extends TelephonyTest {
                 any(), eq(tracker.mSubChangedListener));
     }
 
+    // DiamaneOS: the requested ranges are sent again when the radio comes on.
+    @Test
+    public void testReapplyRequestedRangesOnRadioOn() {
+        List<CellBroadcastIdRange> ranges = new ArrayList<>();
+        ranges.add(new CellBroadcastIdRange(4370, 4370, SmsCbMessage.MESSAGE_FORMAT_3GPP, true));
+        ArgumentCaptor<Message> msgCaptor = ArgumentCaptor.forClass(Message.class);
+        mockCommandInterface();
+
+        // The modem refuses the config while the radio is off.
+        mPhone.setCellBroadcastIdRanges(ranges, r -> {});
+        processAllMessages();
+        verify(mSpyCi, times(1)).setGsmBroadcastConfig(any(), msgCaptor.capture());
+        Message msg = msgCaptor.getValue();
+        AsyncResult.forMessage(msg).exception = new CommandException(
+                CommandException.Error.INVALID_STATE);
+        msg.sendToTarget();
+        mPhone.sendEmptyMessage(Phone.EVENT_RADIO_OFF_OR_NOT_AVAILABLE);
+        processAllMessages();
+        assertTrue(mPhone.getCellBroadcastIdRanges().isEmpty());
+
+        // The radio comes on: the same ranges go to the modem again and are applied.
+        mTracker.sendMessage(CellBroadcastConfigTracker.EVENT_RADIO_ON);
+        processAllMessages();
+        verify(mSpyCi, times(2)).setGsmBroadcastConfig(any(), msgCaptor.capture());
+        msg = msgCaptor.getValue();
+        AsyncResult.forMessage(msg);
+        msg.sendToTarget();
+        processAllMessages();
+        verify(mSpyCi, times(1)).setGsmBroadcastActivation(eq(true), msgCaptor.capture());
+        msg = msgCaptor.getValue();
+        AsyncResult.forMessage(msg);
+        msg.sendToTarget();
+        processAllMessages();
+        assertEquals(ranges, mPhone.getCellBroadcastIdRanges());
+
+        // Applied ranges are not sent again on the next radio-on without a radio-off.
+        mTracker.sendMessage(CellBroadcastConfigTracker.EVENT_RADIO_ON);
+        processAllMessages();
+        verify(mSpyCi, times(2)).setGsmBroadcastConfig(any(), any());
+
+        // After a radio-off the ranges are sent again.
+        mPhone.sendEmptyMessage(Phone.EVENT_RADIO_OFF_OR_NOT_AVAILABLE);
+        processAllMessages();
+        mTracker.sendMessage(CellBroadcastConfigTracker.EVENT_RADIO_ON);
+        processAllMessages();
+        verify(mSpyCi, times(3)).setGsmBroadcastConfig(any(), any());
+    }
+
+    // DiamaneOS: failures while the radio is on are retried a few times, then left alone.
+    @Test
+    public void testReapplyAfterFailureIsLimited() {
+        List<CellBroadcastIdRange> ranges = new ArrayList<>();
+        ranges.add(new CellBroadcastIdRange(4370, 4370, SmsCbMessage.MESSAGE_FORMAT_3GPP, true));
+        ArgumentCaptor<Message> msgCaptor = ArgumentCaptor.forClass(Message.class);
+        mockCommandInterface();
+
+        mPhone.setCellBroadcastIdRanges(ranges, r -> {});
+        processAllMessages();
+        for (int i = 1; i <= CellBroadcastConfigTracker.REAPPLY_MAX_ATTEMPTS + 1; i++) {
+            verify(mSpyCi, times(i)).setGsmBroadcastConfig(any(), msgCaptor.capture());
+            Message msg = msgCaptor.getValue();
+            AsyncResult.forMessage(msg).exception = new CommandException(
+                    CommandException.Error.SYSTEM_ERR);
+            msg.sendToTarget();
+            processAllMessages();
+            moveTimeForward(CellBroadcastConfigTracker.REAPPLY_DELAY_MS);
+            processAllMessages();
+        }
+        verify(mSpyCi, times(CellBroadcastConfigTracker.REAPPLY_MAX_ATTEMPTS + 1))
+                .setGsmBroadcastConfig(any(), any());
+        assertTrue(mPhone.getCellBroadcastIdRanges().isEmpty());
+    }
+
+    // DiamaneOS: a new subscription drops the old request; nothing is sent on radio-on.
+    @Test
+    public void testNoReapplyAfterSubscriptionChange() {
+        List<CellBroadcastIdRange> ranges = new ArrayList<>();
+        ranges.add(new CellBroadcastIdRange(4370, 4370, SmsCbMessage.MESSAGE_FORMAT_3GPP, true));
+        mockCommandInterface();
+
+        mPhone.setCellBroadcastIdRanges(ranges, r -> {});
+        processAllMessages();
+        verify(mSpyCi, times(1)).setGsmBroadcastConfig(any(), any());
+
+        mTracker.mSubId = mTracker.mSubId % SubscriptionManager.DEFAULT_SUBSCRIPTION_ID + 1;
+        mTracker.mSubChangedListener.onSubscriptionsChanged();
+        processAllMessages();
+        mTracker.sendMessage(CellBroadcastConfigTracker.EVENT_RADIO_ON);
+        processAllMessages();
+        verify(mSpyCi, times(1)).setGsmBroadcastConfig(any(), any());
+    }
+
     private void mockCommandInterface() {
         doNothing().when(mSpyCi).setGsmBroadcastConfig(any(), any());
         doNothing().when(mSpyCi).setGsmBroadcastActivation(anyBoolean(), any());

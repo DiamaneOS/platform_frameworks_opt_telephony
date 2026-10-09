@@ -56,6 +56,17 @@ public final class CellBroadcastConfigTracker extends StateMachine {
     private static final int EVENT_SUBSCRIPTION_CHANGED = 5;
     @VisibleForTesting
     public static final int EVENT_RADIO_RESET = 6;
+    @VisibleForTesting
+    public static final int EVENT_RADIO_ON = 7;
+    @VisibleForTesting
+    public static final int EVENT_REAPPLY = 8;
+
+    // DiamaneOS: how often, and how far apart, the requested ranges are sent again after a
+    // failure while the radio is on. The radio coming on resets the count.
+    @VisibleForTesting
+    public static final int REAPPLY_MAX_ATTEMPTS = 3;
+    @VisibleForTesting
+    public static final long REAPPLY_DELAY_MS = 10_000;
 
     private static final int SMS_CB_CODE_SCHEME_MIN = 0;
     private static final int SMS_CB_CODE_SCHEME_MAX = 255;
@@ -64,6 +75,12 @@ public final class CellBroadcastConfigTracker extends StateMachine {
     private List<CellBroadcastIdRange> mCbRanges3gpp = new CopyOnWriteArrayList<>();
     // Cache of current cell broadcast id ranges of 3gpp2
     private List<CellBroadcastIdRange> mCbRanges3gpp2 = new CopyOnWriteArrayList<>();
+    // DiamaneOS: the ranges the client last asked for, kept so they can be sent again when an
+    // attempt fails or the radio comes back on. The client sets them once, for example while
+    // airplane mode with Wi-Fi calling already reports service, and does not ask again when the
+    // radio turns on, so the modem would otherwise keep no channels.
+    private volatile List<CellBroadcastIdRange> mRequestedRanges;
+    private int mReapplyAttempts;
     private Phone mPhone;
     private final LocalLog mLocalLog = new LocalLog(128);
     @VisibleForTesting
@@ -86,8 +103,15 @@ public final class CellBroadcastConfigTracker extends StateMachine {
         private final List<CellBroadcastIdRange> mCbRangesRequest3gpp2 =
                 new CopyOnWriteArrayList<>();
         Consumer<Integer> mCallback;
+        final boolean mIsReapply;
 
         Request(@NonNull List<CellBroadcastIdRange> ranges, @NonNull Consumer<Integer> callback) {
+            this(ranges, callback, false);
+        }
+
+        Request(@NonNull List<CellBroadcastIdRange> ranges, @NonNull Consumer<Integer> callback,
+                boolean isReapply) {
+            mIsReapply = isReapply;
             ranges.forEach(r -> {
                 if (r.getType() == SmsCbMessage.MESSAGE_FORMAT_3GPP) {
                     mCbRangesRequest3gpp.add(r);
@@ -125,6 +149,7 @@ public final class CellBroadcastConfigTracker extends StateMachine {
         public void enter() {
             mPhone.registerForRadioOffOrNotAvailable(getHandler(), EVENT_RADIO_OFF, null);
             mPhone.mCi.registerForModemReset(getHandler(), EVENT_RADIO_RESET, null);
+            mPhone.mCi.registerForOn(getHandler(), EVENT_RADIO_ON, null);
             mPhone.getContext().getSystemService(SubscriptionManager.class)
                     .addOnSubscriptionsChangedListener(new HandlerExecutor(getHandler()),
                             mSubChangedListener);
@@ -134,6 +159,7 @@ public final class CellBroadcastConfigTracker extends StateMachine {
         public void exit() {
             mPhone.unregisterForRadioOffOrNotAvailable(getHandler());
             mPhone.mCi.unregisterForModemReset(getHandler());
+            mPhone.mCi.unregisterForOn(getHandler());
             mPhone.getContext().getSystemService(SubscriptionManager.class)
                     .removeOnSubscriptionsChangedListener(mSubChangedListener);
         }
@@ -148,6 +174,7 @@ public final class CellBroadcastConfigTracker extends StateMachine {
                 case EVENT_RADIO_OFF:
                 case EVENT_RADIO_RESET:
                     resetConfig();
+                    removeMessages(EVENT_REAPPLY);
                     break;
                 case EVENT_SUBSCRIPTION_CHANGED:
                     int subId = mPhone.getSubId();
@@ -155,7 +182,17 @@ public final class CellBroadcastConfigTracker extends StateMachine {
                         log("SubId changed from " + mSubId + " to " + subId);
                         mSubId = subId;
                         resetConfig();
+                        mRequestedRanges = null;
+                        removeMessages(EVENT_REAPPLY);
                     }
+                    break;
+                case EVENT_RADIO_ON:
+                    mReapplyAttempts = 0;
+                    removeMessages(EVENT_REAPPLY);
+                    reapplyRequestedRanges();
+                    break;
+                case EVENT_REAPPLY:
+                    reapplyRequestedRanges();
                     break;
                 default:
                     log("unexpected message!");
@@ -182,6 +219,10 @@ public final class CellBroadcastConfigTracker extends StateMachine {
             switch (msg.what) {
                 case EVENT_REQUEST:
                     Request request = (Request) msg.obj;
+                    if (!request.mIsReapply) {
+                        mReapplyAttempts = 0;
+                        removeMessages(EVENT_REAPPLY);
+                    }
                     if (DBG) {
                         logd("IdleState handle EVENT_REQUEST with request:" + request);
                         mLocalLog.log("IdleState handle EVENT_REQUEST with request:" + request
@@ -447,7 +488,35 @@ public final class CellBroadcastConfigTracker extends StateMachine {
             logd("setCellBroadcastIdRanges with ranges:" + ranges);
         }
         ranges = mergeRangesAsNeeded(ranges);
-        sendMessage(EVENT_REQUEST, new Request(ranges, callback));
+        mRequestedRanges = new ArrayList<>(ranges);
+        sendMessage(EVENT_REQUEST, new Request(ranges, result -> {
+            callback.accept(result);
+            scheduleReapplyOnFailure(result);
+        }));
+    }
+
+    /** DiamaneOS: send the client's last requested ranges again, unless they are applied. */
+    private void reapplyRequestedRanges() {
+        List<CellBroadcastIdRange> requested = mRequestedRanges;
+        if (requested == null) {
+            return;
+        }
+        mLocalLog.log("Apply the requested ranges again: " + requested);
+        sendMessage(EVENT_REQUEST, new Request(new ArrayList<>(requested),
+                this::scheduleReapplyOnFailure, true));
+    }
+
+    /** DiamaneOS: after a failure while the radio is on, try again a few times. */
+    private void scheduleReapplyOnFailure(int result) {
+        if (result == TelephonyManager.CELL_BROADCAST_RESULT_SUCCESS
+                || mRequestedRanges == null
+                || mPhone.mCi.getRadioState() != TelephonyManager.RADIO_POWER_ON
+                || mReapplyAttempts >= REAPPLY_MAX_ATTEMPTS) {
+            return;
+        }
+        mReapplyAttempts++;
+        removeMessages(EVENT_REAPPLY);
+        sendMessageDelayed(EVENT_REAPPLY, REAPPLY_DELAY_MS);
     }
 
     /**
@@ -581,6 +650,8 @@ public final class CellBroadcastConfigTracker extends StateMachine {
         pw.increaseIndent();
         pw.println("Current mCbRanges3gpp:" + mCbRanges3gpp);
         pw.println("Current mCbRanges3gpp2:" + mCbRanges3gpp2);
+        pw.println("Requested ranges:" + mRequestedRanges);
+        pw.println("Re-apply attempts:" + mReapplyAttempts);
         pw.decreaseIndent();
 
         pw.println("Local logs:");
