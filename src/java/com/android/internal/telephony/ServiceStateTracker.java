@@ -2764,7 +2764,7 @@ public class ServiceStateTracker extends Handler {
     public static final String NETWORK_STATE_POLL_ALARM_TAG = "SST.networkStatePoll";
     private int mNetworkStatePollWindowMs;
     private final AlarmManager mAlarmManager;
-    /** elapsedRealtime at which the current window ends; 0 when no window is open. */
+    /** elapsedRealtime at which the current window ends, or 0 when no window is open. */
     @VisibleForTesting
     public long mNetworkStatePollWindowEndMs;
     private boolean mNetworkStatePollPending;

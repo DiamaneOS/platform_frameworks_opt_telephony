@@ -2674,7 +2674,7 @@ public class RILUtils {
 
     /**
      * Log form of a RegStateResult. Its own toString() prints the serving cell's identity in
-     * full; this prints the framework CellIdentity in its place, whose toString() redacts the
+     * full. This prints the framework CellIdentity in its place, whose toString() redacts the
      * cell, area and channel numbers with Rlog.pii(), as the service state logs already do.
      * @param result RegStateResult defined in RegStateResult.aidl
      * @return The RegStateResult as a String, with the cell identity redacted

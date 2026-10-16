@@ -601,7 +601,7 @@ public final class CellBroadcastConfigTrackerTest extends TelephonyTest {
         assertTrue(mPhone.getCellBroadcastIdRanges().isEmpty());
     }
 
-    // DiamaneOS: a new subscription drops the old request; nothing is sent on radio-on.
+    // DiamaneOS: a new subscription drops the old request. Nothing is sent on radio-on.
     @Test
     public void testNoReapplyAfterSubscriptionChange() {
         List<CellBroadcastIdRange> ranges = new ArrayList<>();

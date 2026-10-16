@@ -256,7 +256,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
 
         doReturn(mIwlanNetworkServiceStub).when(mIwlanNetworkServiceStub).asBinder();
         // The registration manager accepts only system network-service packages.
-        // Describe these two simulated providers explicitly; do not bypass that check.
+        // Describe these two simulated providers explicitly. Do not bypass that check.
         ApplicationInfo networkServiceInfo = new ApplicationInfo();
         networkServiceInfo.flags = ApplicationInfo.FLAG_SYSTEM;
         doReturn(networkServiceInfo).when(mPackageManager)
@@ -3964,7 +3964,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
                 TelephonyManager.RADIO_POWER_UNAVAILABLE);
         clearInvocations(mAlarmManager);
 
-        // The report polls at once; with the radio unavailable the poll sends no requests and
+        // The report polls at once. With the radio unavailable the poll sends no requests and
         // sets the state out of service.
         reportNetworkStateChanged();
         assertEquals(ServiceState.STATE_OUT_OF_SERVICE, sst.mSS.getState());
