@@ -267,7 +267,7 @@ public class PhoneFactory {
 
                 sNotificationChannelController = new NotificationChannelController(context);
 
-                // DiamaneOS: offer a restart after imeiprovd wrote the IMEIs during this boot.
+                // DiamaneOS: offer a restart on the first boot after a clean install.
                 ImeiRestartNotice.start(context);
 
                 // Create the TelephonyNetworkProvider instance, which is a singleton.

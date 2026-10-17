@@ -20,22 +20,32 @@ import org.junit.runners.JUnit4;
 @SmallTest
 @RunWith(JUnit4.class)
 public class ImeiRestartNoticeTest {
+    private static final String[] STATUSES =
+            {"", "running", "reversed", "corrected", "written", "unchanged", "failed"};
+
     @Test
-    public void showsOnlyAfterAWriteAndOncePerBoot() {
-        assertEquals(SHOW, decide("written", 30_000, false));
-        assertEquals(SHOW, decide("written", WAIT_LIMIT_MS * 10, false));
-        assertEquals(NONE, decide("written", 30_000, true));
-        for (String status : new String[] {"unchanged", "failed", "reversed", "corrected"}) {
-            assertEquals(status, NONE, decide(status, 30_000, false));
+    public void showsOnlyForAReversedWriteOnFreshUserdataOnce() {
+        assertEquals(SHOW, decide("reversed", true, 30_000, false));
+        assertEquals(SHOW, decide("reversed", true, WAIT_LIMIT_MS * 10, false));
+        assertEquals(NONE, decide("reversed", true, 30_000, true));
+        for (String status : new String[] {"corrected", "written", "unchanged", "failed"}) {
+            assertEquals(status, NONE, decide(status, true, 30_000, false));
+        }
+    }
+
+    @Test
+    public void nothingWithoutFreshUserdata() {
+        for (String status : STATUSES) {
+            assertEquals(status, NONE, decide(status, false, 30_000, false));
         }
     }
 
     @Test
     public void waitsWhileImeiprovdRunsWithinTheLimit() {
-        assertEquals(WAIT, decide("running", 30_000, false));
-        assertEquals(WAIT, decide("", 30_000, false));
-        assertEquals(NONE, decide("running", WAIT_LIMIT_MS, false));
-        assertEquals(NONE, decide("", WAIT_LIMIT_MS, false));
-        assertEquals(NONE, decide("running", 30_000, true));
+        assertEquals(WAIT, decide("running", true, 30_000, false));
+        assertEquals(WAIT, decide("", true, 30_000, false));
+        assertEquals(NONE, decide("running", true, WAIT_LIMIT_MS, false));
+        assertEquals(NONE, decide("", true, WAIT_LIMIT_MS, false));
+        assertEquals(NONE, decide("running", true, 30_000, true));
     }
 }
