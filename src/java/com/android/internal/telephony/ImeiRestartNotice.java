@@ -20,6 +20,8 @@ import android.os.SystemClock;
 import android.os.SystemProperties;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.telephony.subscription.SubscriptionManagerService;
+import com.android.internal.telephony.subscription.SubscriptionManagerService.SubscriptionManagerServiceCallback;
 import com.android.internal.telephony.util.NotificationChannelController;
 import com.android.telephony.Rlog;
 
@@ -27,7 +29,8 @@ import com.android.telephony.Rlog;
  * DiamaneOS: offers a restart on the first boot after a clean install, where Wi-Fi calling failed
  * until a restart. That boot has fresh userdata and imeiprovd found the modem without IMEIs
  * ("reversed"). Updates keep userdata, and a factory reset finds the IMEIs in place. Shown once
- * and gone after the restart.
+ * and gone after the restart. Shown only with an active SIM: without one it waits for a SIM during
+ * that boot.
  */
 public final class ImeiRestartNotice {
     private static final String TAG = "ImeiRestartNotice";
@@ -44,13 +47,14 @@ public final class ImeiRestartNotice {
     static final long WAIT_LIMIT_MS = 180_000;
 
     @VisibleForTesting
-    enum Decision { WAIT, SHOW, NONE }
+    enum Decision { WAIT, WAIT_FOR_SIM, SHOW, NONE }
 
     private final Context mContext;
     private final Handler mHandler;
     private final SharedPreferences mPrefs;
     private final boolean mFirstBoot;
     private boolean mReceiverRegistered;
+    private SubscriptionManagerServiceCallback mSimCallback;
 
     /** Starts the check. Call once in the phone process, after the notification channels. */
     public static void start(@NonNull Context context) {
@@ -59,9 +63,9 @@ public final class ImeiRestartNotice {
 
     @VisibleForTesting
     static Decision decide(@NonNull String status, boolean firstBoot, long sinceBootMs,
-            boolean shown) {
+            boolean shown, boolean simActive) {
         if (!firstBoot || shown) return Decision.NONE;
-        if ("reversed".equals(status)) return Decision.SHOW;
+        if ("reversed".equals(status)) return simActive ? Decision.SHOW : Decision.WAIT_FOR_SIM;
         // "running" until imeiprovd is done, empty until it starts.
         boolean pending = status.isEmpty() || "running".equals(status);
         return pending && sinceBootMs < WAIT_LIMIT_MS ? Decision.WAIT : Decision.NONE;
@@ -93,12 +97,40 @@ public final class ImeiRestartNotice {
             registerRestart();
         }
         Decision decision = decide(SystemProperties.get(STATUS_PROPERTY), mFirstBoot,
-                SystemClock.elapsedRealtime(), shown);
+                SystemClock.elapsedRealtime(), shown, mFirstBoot && !shown && isSimActive());
+        if (decision == Decision.WAIT_FOR_SIM) {
+            waitForSim();
+            return;
+        }
+        stopWaitingForSim();
         if (decision == Decision.WAIT) {
             mHandler.postDelayed(this::check, RECHECK_MS);
         } else if (decision == Decision.SHOW) {
             show();
         }
+    }
+
+    /** PhoneFactory creates SubscriptionManagerService before this starts. */
+    private static boolean isSimActive() {
+        return SubscriptionManagerService.getInstance().getActiveSubIdList(false).length > 0;
+    }
+
+    private void waitForSim() {
+        if (mSimCallback != null) return;
+        Rlog.i(TAG, "waiting for an active SIM");
+        mSimCallback = new SubscriptionManagerServiceCallback(mHandler::post) {
+            @Override
+            public void onSubscriptionChanged(int subId) {
+                check();
+            }
+        };
+        SubscriptionManagerService.getInstance().registerCallback(mSimCallback);
+    }
+
+    private void stopWaitingForSim() {
+        if (mSimCallback == null) return;
+        SubscriptionManagerService.getInstance().unregisterCallback(mSimCallback);
+        mSimCallback = null;
     }
 
     private void show() {
