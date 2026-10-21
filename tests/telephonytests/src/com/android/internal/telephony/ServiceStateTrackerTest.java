@@ -3659,7 +3659,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
 
     private static final int NETWORK_STATE_POLL_WINDOW_MS = 5000;
     private static final String NETWORK_STATE_POLL_ALARM_TAG =
-            ServiceStateTracker.NETWORK_STATE_POLL_ALARM_TAG + PHONE_ID;
+            NetworkStatePollCoalescer.NETWORK_STATE_POLL_ALARM_TAG + PHONE_ID;
 
     private AlarmManager mAlarmManager;
 
@@ -3677,9 +3677,13 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         clearInvocations(mAlarmManager);
     }
 
+    private NetworkStatePollCoalescer coalescer() {
+        return sst.mNetworkStatePollCoalescer;
+    }
+
     private void enableNetworkStatePollCoalescing() {
         setUpIdleInService();
-        sst.setNetworkStatePollWindowMs(NETWORK_STATE_POLL_WINDOW_MS);
+        coalescer().setNetworkStatePollWindowMs(NETWORK_STATE_POLL_WINDOW_MS);
     }
 
     private void reportNetworkStateChanged() {
@@ -3693,12 +3697,12 @@ public class ServiceStateTrackerTest extends TelephonyTest {
     }
 
     private void fireNetworkStatePollAlarm() {
-        sst.mNetworkStatePollAlarm.onAlarm();
+        coalescer().mNetworkStatePollAlarm.onAlarm();
         processAllMessages();
     }
 
     private void expireNetworkStatePollWindow() {
-        sst.mNetworkStatePollWindowEndMs = SystemClock.elapsedRealtime() - 1;
+        coalescer().mNetworkStatePollWindowEndMs = SystemClock.elapsedRealtime() - 1;
     }
 
     private void verifyNoNetworkStatePollAlarmSet() {
@@ -3711,7 +3715,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         int polls = polls();
         reportNetworkStateChanged();
         assertEquals(polls + 1, polls());
-        assertTrue(sst.mNetworkStatePollWindowEndMs > SystemClock.elapsedRealtime());
+        assertTrue(coalescer().mNetworkStatePollWindowEndMs > SystemClock.elapsedRealtime());
     }
 
     /** The first report in a window waits and sets one backstop wakeup alarm 2W after it. */
@@ -3725,7 +3729,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         ArgumentCaptor<Long> triggerAt = ArgumentCaptor.forClass(Long.class);
         verify(mAlarmManager).setExact(eq(AlarmManager.ELAPSED_REALTIME_WAKEUP),
                 triggerAt.capture(), eq(NETWORK_STATE_POLL_ALARM_TAG),
-                eq(sst.mNetworkStatePollAlarm), eq(sst));
+                eq(coalescer().mNetworkStatePollAlarm), eq(sst));
         assertTrue(triggerAt.getValue() >= before + 2L * NETWORK_STATE_POLL_WINDOW_MS);
         assertTrue(triggerAt.getValue() <= after + 2L * NETWORK_STATE_POLL_WINDOW_MS);
     }
@@ -3739,7 +3743,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
             assertEquals(polls + 1, polls());
         }
         verifyNoNetworkStatePollAlarmSet();
-        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        assertEquals(0, coalescer().mNetworkStatePollWindowEndMs);
     }
 
     private String dumpSst() {
@@ -3751,10 +3755,10 @@ public class ServiceStateTrackerTest extends TelephonyTest {
     @Test
     public void testNetworkStatePollWindowOff_everyReportPolls() {
         setUpIdleInService();
-        sst.setNetworkStatePollWindowMs(0); // as with the property unset
+        coalescer().setNetworkStatePollWindowMs(0); // as with the property unset
 
         assertReportsPollAtOnce(5);
-        verify(mAlarmManager, never()).cancel(sst.mNetworkStatePollAlarm);
+        verify(mAlarmManager, never()).cancel(coalescer().mNetworkStatePollAlarm);
     }
 
     @Test
@@ -3782,8 +3786,8 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         assertEquals(voice + 1, mSimulatedCommands.getGetVoiceRegistrationStateCallCount());
         assertEquals(data + 1, mSimulatedCommands.getGetDataRegistrationStateCallCount());
         assertEquals(selection + 1, mSimulatedCommands.getGetNetworkSelectionModeCallCount());
-        verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
-        assertTrue(sst.mNetworkStatePollWindowEndMs > SystemClock.elapsedRealtime());
+        verify(mAlarmManager).cancel(coalescer().mNetworkStatePollAlarm);
+        assertTrue(coalescer().mNetworkStatePollWindowEndMs > SystemClock.elapsedRealtime());
 
         // A late alarm does nothing.
         fireNetworkStatePollAlarm();
@@ -3831,7 +3835,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         doReturn(PhoneConstants.State.OFFHOOK).when(mPhone).getState();
         fireNetworkStatePollAlarm();
         assertEquals(polls + 1, polls());
-        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        assertEquals(0, coalescer().mNetworkStatePollWindowEndMs);
 
         doReturn(PhoneConstants.State.IDLE).when(mPhone).getState();
         openNetworkStatePollWindow();
@@ -3853,11 +3857,12 @@ public class ServiceStateTrackerTest extends TelephonyTest {
     @Test
     public void testNetworkStatePollWindowClamped() {
         enableNetworkStatePollCoalescing();
-        sst.setNetworkStatePollWindowMs(600000);
+        coalescer().setNetworkStatePollWindowMs(600000);
         openNetworkStatePollWindow();
-        assertTrue(sst.mNetworkStatePollWindowEndMs - SystemClock.elapsedRealtime() <= 15000);
+        assertTrue(coalescer().mNetworkStatePollWindowEndMs - SystemClock.elapsedRealtime()
+                <= 15000);
 
-        sst.setNetworkStatePollWindowMs(-5);
+        coalescer().setNetworkStatePollWindowMs(-5);
         assertReportsPollAtOnce(3);
     }
 
@@ -3968,7 +3973,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         // sets the state out of service.
         reportNetworkStateChanged();
         assertEquals(ServiceState.STATE_OUT_OF_SERVICE, sst.mSS.getState());
-        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        assertEquals(0, coalescer().mNetworkStatePollWindowEndMs);
         verifyNoNetworkStatePollAlarmSet();
     }
 
@@ -4023,7 +4028,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
 
         reportNetworkStateChanged();
         assertEquals(polls + 1, polls());
-        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        assertEquals(0, coalescer().mNetworkStatePollWindowEndMs);
 
         // The first idle report after the call is a leading poll, not a coalesced one.
         doReturn(PhoneConstants.State.IDLE).when(mPhone).getState();
@@ -4091,8 +4096,8 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         sst.flushNetworkStatePoll();
         processAllMessages();
         assertEquals(polls + 1, polls());
-        verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
-        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        verify(mAlarmManager).cancel(coalescer().mNetworkStatePollAlarm);
+        assertEquals(0, coalescer().mNetworkStatePollWindowEndMs);
         fireNetworkStatePollAlarm();
         assertEquals(polls + 1, polls());
 
@@ -4102,17 +4107,17 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         sst.flushNetworkStatePoll();
         processAllMessages();
         assertEquals(polls, polls());
-        assertEquals(0, sst.mNetworkStatePollWindowEndMs);
+        assertEquals(0, coalescer().mNetworkStatePollWindowEndMs);
         openNetworkStatePollWindow();
 
         // Off: nothing happens.
-        sst.setNetworkStatePollWindowMs(0);
+        coalescer().setNetworkStatePollWindowMs(0);
         clearInvocations(mAlarmManager);
         polls = polls();
         sst.flushNetworkStatePoll();
         processAllMessages();
         assertEquals(polls, polls());
-        verify(mAlarmManager, never()).cancel(sst.mNetworkStatePollAlarm);
+        verify(mAlarmManager, never()).cancel(coalescer().mNetworkStatePollAlarm);
         verifyNoNetworkStatePollAlarmSet();
     }
 
@@ -4133,7 +4138,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
             otherPoll.run();
             processAllMessages();
             assertEquals(polls + 1, polls());
-            verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
+            verify(mAlarmManager).cancel(coalescer().mNetworkStatePollAlarm);
             fireNetworkStatePollAlarm();
             assertEquals(polls + 1, polls());
         }
@@ -4146,7 +4151,7 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         reportNetworkStateChanged();
 
         sst.dispose();
-        verify(mAlarmManager).cancel(sst.mNetworkStatePollAlarm);
+        verify(mAlarmManager).cancel(coalescer().mNetworkStatePollAlarm);
     }
 
     @Test
@@ -4155,6 +4160,6 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         openNetworkStatePollWindow();
 
         sst.dispose();
-        verify(mAlarmManager, never()).cancel(sst.mNetworkStatePollAlarm);
+        verify(mAlarmManager, never()).cancel(coalescer().mNetworkStatePollAlarm);
     }
 }
