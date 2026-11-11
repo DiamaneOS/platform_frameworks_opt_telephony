@@ -189,15 +189,47 @@ public class CarrierDisplayNameResolverTest extends TelephonyTest {
     }
 
     @Test
-    public void testShouldShowSPNFromSourceCC_conditionOverrideShowPLMN_notShowSPN() {
-        // Carrier config source > sim record source
+    public void testShouldShowSPNFromSourceCC_conditionOverrideShowPLMN_alsoShowSPNAtHome() {
+        // DiamaneOS: the override holds the EF_SPN bits. B1 = 1 adds the PLMN name at home, where
+        // the SPN shows anyway.
         mConfig.putInt(CarrierConfigManager.KEY_SPN_DISPLAY_CONDITION_OVERRIDE_INT, 1);
 
         // Update ef records from carrier config
         mCdnr.updateEfFromCarrierConfig(mConfig);
 
         CarrierDisplayNameData data = mCdnr.getCarrierDisplayNameData();
+        assertThat(data.shouldShowSpn()).isTrue();
+    }
+
+    @Test
+    public void testShouldShowSPNFromSourceCC_conditionOverrideZero_showSPNOnlyAtHome() {
+        // DiamaneOS: 0 (B1 = 0, B2 = 0), as Vodafone DE's carrier config sets with its name, shows
+        // the SPN and not the PLMN name at home. Read as a bitmask, it hid both.
+        mConfig.putString(CarrierConfigManager.KEY_CARRIER_NAME_STRING, SPN_FROM_CC);
+        mConfig.putInt(CarrierConfigManager.KEY_SPN_DISPLAY_CONDITION_OVERRIDE_INT, 0);
+        mSS.setRoaming(NON_ROAMING);
+
+        mCdnr.updateEfFromCarrierConfig(mConfig);
+
+        CarrierDisplayNameData data = mCdnr.getCarrierDisplayNameData();
+        assertThat(data.getSpn()).isEqualTo(SPN_FROM_CC);
+        assertThat(data.shouldShowSpn()).isTrue();
+        assertThat(data.shouldShowPlmn()).isFalse();
+    }
+
+    @Test
+    public void testShouldShowPLMNFromSourceCC_conditionOverrideSpnNotRequired_onlyPLMNRoaming() {
+        // DiamaneOS: B2 = 1, the SPN is not required when roaming: the PLMN name only.
+        mConfig.putString(CarrierConfigManager.KEY_CARRIER_NAME_STRING, SPN_FROM_CC);
+        mConfig.putInt(CarrierConfigManager.KEY_SPN_DISPLAY_CONDITION_OVERRIDE_INT, 2);
+        mSS.setOperatorName("long", "short", NON_HOME_PLMN_NUMERIC);
+        mSS.setRoaming(ROAMING);
+
+        mCdnr.updateEfFromCarrierConfig(mConfig);
+
+        CarrierDisplayNameData data = mCdnr.getCarrierDisplayNameData();
         assertThat(data.shouldShowSpn()).isFalse();
+        assertThat(data.shouldShowPlmn()).isTrue();
     }
 
     @Test

@@ -60,7 +60,18 @@ public final class CarrierConfigEfData implements EfData {
 
     @Override
     public int getServiceProviderNameDisplayCondition(boolean isRoaming) {
-        return mSpnDisplayCondition;
+        // DiamaneOS: KEY_SPN_DISPLAY_CONDITION_OVERRIDE_INT holds the B1 and B2 bits of EF_SPN, as
+        // its documentation says, not the resolver's bitmask. Read as a bitmask, the common value 0
+        // hid both names (Vodafone DE sets it), so the shade dropped that SIM. Convert it as
+        // SIMRecords converts EF_SPN, and show the SPN at home and the PLMN when roaming, as
+        // UsimEfData does for the SIM's own condition.
+        if (mSpnDisplayCondition == IccRecords.INVALID_CARRIER_NAME_DISPLAY_CONDITION_BITMASK) {
+            return mSpnDisplayCondition;
+        }
+        int condition = IccRecords.convertSpnDisplayConditionToBitmask(mSpnDisplayCondition);
+        return condition | (isRoaming
+                ? IccRecords.CARRIER_NAME_DISPLAY_CONDITION_BITMASK_PLMN
+                : IccRecords.CARRIER_NAME_DISPLAY_CONDITION_BITMASK_SPN);
     }
 
     @Override
