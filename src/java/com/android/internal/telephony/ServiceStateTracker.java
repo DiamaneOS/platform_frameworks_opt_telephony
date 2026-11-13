@@ -304,6 +304,9 @@ public class ServiceStateTracker extends Handler {
     // Show PLMN only and only if this bit is set.
     public static final int CARRIER_NAME_DISPLAY_BITMASK_SHOW_PLMN = 1 << 1;
 
+    // DiamaneOS: the one name format while registered for Wi-Fi calling, the name itself.
+    private static final String WFC_SPN_FORMAT = "%s";
+
     private List<Message> mPendingCellInfoRequests = new LinkedList<>();
     // @GuardedBy("mPendingCellInfoRequests")
     private boolean mIsPendingCellInfoRequest = false;
@@ -2248,48 +2251,15 @@ public class ServiceStateTracker extends Handler {
                 && (combinedRegState == ServiceState.STATE_IN_SERVICE
                 && mSS.getDataNetworkType() == TelephonyManager.NETWORK_TYPE_IWLAN)) {
             // In Wi-Fi Calling mode (connected to WiFi and WFC enabled),
-            // show SPN or PLMN + WiFi Calling
+            // show the SPN, or the PLMN if there is no valid SPN.
             //
-            // 1) Show SPN + Wi-Fi Calling If SIM has SPN and SPN display condition
-            //    is satisfied or SPN override is enabled for this carrier
-            //
-            // 2) Show PLMN + Wi-Fi Calling if there is no valid SPN in case 1
-
-            int voiceIdx;
-            int dataIdx;
-            int flightModeIdx;
-            boolean useRootLocale;
-
-            voiceIdx = mCarrierConfig.getInt(CarrierConfigManager.KEY_WFC_SPN_FORMAT_IDX_INT);
-            dataIdx = mCarrierConfig.getInt(CarrierConfigManager.KEY_WFC_DATA_SPN_FORMAT_IDX_INT);
-            flightModeIdx = mCarrierConfig.getInt(
-                    CarrierConfigManager.KEY_WFC_FLIGHT_MODE_SPN_FORMAT_IDX_INT);
-            useRootLocale =
-                    mCarrierConfig.getBoolean(CarrierConfigManager.KEY_WFC_SPN_USE_ROOT_LOCALE);
-
-            String[] wfcSpnFormats = SubscriptionManager.getResourcesForSubId(mPhone.getContext(),
-                    mPhone.getSubId(), useRootLocale)
-                    .getStringArray(com.android.internal.R.array.wfcSpnFormats);
-
-            if (voiceIdx < 0 || voiceIdx >= wfcSpnFormats.length) {
-                loge("updateCarrierDisplayName: KEY_WFC_SPN_FORMAT_IDX_INT out of bounds: "
-                        + voiceIdx);
-                voiceIdx = 0;
-            }
-            if (dataIdx < 0 || dataIdx >= wfcSpnFormats.length) {
-                loge("updateCarrierDisplayName: KEY_WFC_DATA_SPN_FORMAT_IDX_INT out of bounds: "
-                        + dataIdx);
-                dataIdx = 0;
-            }
-            if (flightModeIdx < 0 || flightModeIdx >= wfcSpnFormats.length) {
-                // KEY_WFC_FLIGHT_MODE_SPN_FORMAT_IDX_INT out of bounds. Use the value from
-                // voiceIdx.
-                flightModeIdx = voiceIdx;
-            }
-
-            wfcVoiceSpnFormat = wfcSpnFormats[voiceIdx];
-            wfcDataSpnFormat = wfcSpnFormats[dataIdx];
-            wfcFlightSpnFormat = wfcSpnFormats[flightModeIdx];
+            // DiamaneOS: the carrier's Wi-Fi calling name formats (KEY_WFC_SPN_FORMAT_IDX_INT
+            // with its data and flight mode variants, such as "WiFi Call" or "%s Wi-Fi Calling")
+            // are not applied. The SIM keeps its carrier name, and SystemUI shows a Wi-Fi
+            // calling icon with it.
+            wfcVoiceSpnFormat = WFC_SPN_FORMAT;
+            wfcDataSpnFormat = WFC_SPN_FORMAT;
+            wfcFlightSpnFormat = WFC_SPN_FORMAT;
         }
 
         String crossSimSpnFormat = null;

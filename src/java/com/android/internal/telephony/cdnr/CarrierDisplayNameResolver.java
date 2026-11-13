@@ -29,8 +29,6 @@ import static com.android.internal.telephony.cdnr.EfData.EF_SOURCE_VOICE_OPERATO
 
 import android.annotation.NonNull;
 import android.content.Context;
-import android.content.res.Configuration;
-import android.content.res.Resources;
 import android.os.PersistableBundle;
 import android.telephony.CarrierConfigManager;
 import android.telephony.ServiceState;
@@ -57,7 +55,6 @@ import com.android.telephony.Rlog;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 /** Carrier display name resolver. */
@@ -326,35 +323,27 @@ public class CarrierDisplayNameResolver {
                 .build();
     }
 
+    /**
+     * The name of a SIM that is registered for Wi-Fi calling: its SPN, or without one the name of
+     * its home network.
+     *
+     * DiamaneOS: the carrier's Wi-Fi calling name formats (KEY_WFC_SPN_FORMAT_IDX_INT with its data
+     * and flight mode variants, such as "WiFi Call" or "%s Wi-Fi Calling") are not applied. The
+     * SIM keeps its carrier name, and SystemUI shows a Wi-Fi calling icon with it.
+     */
     private CarrierDisplayNameData getCarrierDisplayNameFromWifiCallingOverride(
             CarrierDisplayNameData rawCarrierDisplayNameData) {
-        PersistableBundle config = getCarrierConfig();
-        boolean useRootLocale = config.getBoolean(CarrierConfigManager.KEY_WFC_SPN_USE_ROOT_LOCALE);
-        Context displayNameContext = mContext;
-        if (useRootLocale) {
-            Configuration displayNameConfig = mContext.getResources().getConfiguration();
-            displayNameConfig.setLocale(Locale.ROOT);
-            // Create a new Context for this temporary change
-            displayNameContext = mContext.createConfigurationContext(displayNameConfig);
-        }
-        Resources r = displayNameContext.getResources();
-        String[] wfcSpnFormats = r.getStringArray(com.android.internal.R.array.wfcSpnFormats);
-        WfcCarrierNameFormatter wfcFormatter = new WfcCarrierNameFormatter(config, wfcSpnFormats,
-                getServiceState().getState() == ServiceState.STATE_POWER_OFF);
-
-        // Override the spn, data spn, plmn by wifi-calling
-        String wfcSpn = wfcFormatter.formatVoiceName(rawCarrierDisplayNameData.getSpn());
-        String wfcDataSpn = wfcFormatter.formatDataName(rawCarrierDisplayNameData.getSpn());
+        String wfcSpn = trimName(rawCarrierDisplayNameData.getSpn());
         List<PlmnNetworkName> efPnn = getEfPnn();
         String plmn = efPnn.isEmpty() ? "" : getPlmnNetworkName(efPnn.get(0));
-        String wfcPlmn = wfcFormatter.formatVoiceName(
+        String wfcPlmn = trimName(
                 TextUtils.isEmpty(plmn) ? rawCarrierDisplayNameData.getPlmn() : plmn);
 
         CarrierDisplayNameData result = rawCarrierDisplayNameData;
-        if (!TextUtils.isEmpty(wfcSpn) && !TextUtils.isEmpty(wfcDataSpn)) {
+        if (!TextUtils.isEmpty(wfcSpn)) {
             result = new CarrierDisplayNameData.Builder()
                     .setSpn(wfcSpn)
-                    .setDataSpn(wfcDataSpn)
+                    .setDataSpn(wfcSpn)
                     .setShowSpn(true)
                     .build();
         } else if (!TextUtils.isEmpty(wfcPlmn)) {
@@ -364,6 +353,10 @@ public class CarrierDisplayNameResolver {
                     .build();
         }
         return result;
+    }
+
+    private static String trimName(String name) {
+        return TextUtils.isEmpty(name) ? name : name.trim();
     }
 
     private CarrierDisplayNameData getCarrierDisplayNameFromCrossSimCallingOverride(
@@ -556,67 +549,5 @@ public class CarrierDisplayNameResolver {
 
     private ServiceState getServiceState() {
         return mPhone.getServiceStateTracker().getServiceState();
-    }
-
-    /**
-     * WiFi-Calling formatter for carrier name.
-     */
-    private static final class WfcCarrierNameFormatter {
-        final String mVoiceFormat;
-        final String mDataFormat;
-
-        WfcCarrierNameFormatter(@NonNull PersistableBundle config,
-                @NonNull String[] wfcFormats, boolean inFlightMode) {
-            int voiceIdx = config.getInt(CarrierConfigManager.KEY_WFC_SPN_FORMAT_IDX_INT);
-            int dataIdx = config.getInt(CarrierConfigManager.KEY_WFC_DATA_SPN_FORMAT_IDX_INT);
-            int flightModeIdx = config.getInt(
-                    CarrierConfigManager.KEY_WFC_FLIGHT_MODE_SPN_FORMAT_IDX_INT);
-
-            if (voiceIdx < 0 || voiceIdx >= wfcFormats.length) {
-                Rlog.e(TAG, "updateSpnDisplay: KEY_WFC_SPN_FORMAT_IDX_INT out of bounds: "
-                        + voiceIdx);
-                voiceIdx = 0;
-            }
-
-            if (dataIdx < 0 || dataIdx >= wfcFormats.length) {
-                Rlog.e(TAG, "updateSpnDisplay: KEY_WFC_DATA_SPN_FORMAT_IDX_INT out of bounds: "
-                        + dataIdx);
-                dataIdx = 0;
-            }
-
-            if (flightModeIdx < 0 || flightModeIdx >= wfcFormats.length) {
-                // KEY_WFC_FLIGHT_MODE_SPN_FORMAT_IDX_INT out of bounds. Use the value from
-                // voiceIdx.
-                flightModeIdx = voiceIdx;
-            }
-
-            // flight mode
-            if (inFlightMode) {
-                voiceIdx = flightModeIdx;
-            }
-
-            mVoiceFormat = voiceIdx != -1 ? wfcFormats[voiceIdx] : "";
-            mDataFormat = dataIdx != -1 ? wfcFormats[dataIdx] : "";
-        }
-
-        /**
-         * Format the given {@code name} using wifi-calling voice name formatter.
-         * @param name the string need to be formatted.
-         * @return formatted string if {@code name} is not empty, otherwise return {@code name}.
-         */
-        public String formatVoiceName(String name) {
-            if (TextUtils.isEmpty(name)) return name;
-            return String.format(mVoiceFormat, name.trim());
-        }
-
-        /**
-         * Format the given {@code name} using wifi-calling data name formatter.
-         * @param name the string need to be formatted.
-         * @return formatted string if {@code name} is not empty, otherwise return {@code name}.
-         */
-        public String formatDataName(String name) {
-            if (TextUtils.isEmpty(name)) return name;
-            return String.format(mDataFormat, name.trim());
-        }
     }
 }

@@ -2915,14 +2915,13 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         // update the spn
         sst.updateCarrierDisplayName();
 
-        // Only spn should be shown
+        // Only spn should be shown. DiamaneOS: as it is, without the carrier's Wi-Fi calling
+        // formats that setUp() configures.
         String spn = mBundle.getString(CarrierConfigManager.KEY_CARRIER_NAME_STRING);
         Bundle b = getExtrasFromLastSpnUpdateIntent();
-        assertThat(b.getString(TelephonyManager.EXTRA_SPN))
-                .isEqualTo(String.format(WIFI_CALLING_VOICE_FORMAT, spn));
+        assertThat(b.getString(TelephonyManager.EXTRA_SPN)).isEqualTo(spn);
         assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_SPN)).isTrue();
-        assertThat(b.getString(TelephonyManager.EXTRA_DATA_SPN))
-                .isEqualTo(String.format(WIFI_CALLING_DATA_FORMAT, spn));
+        assertThat(b.getString(TelephonyManager.EXTRA_DATA_SPN)).isEqualTo(spn);
         assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_PLMN)).isFalse();
     }
 
@@ -2945,12 +2944,12 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         // update the spn
         sst.updateCarrierDisplayName();
 
-        // Only plmn should be shown
+        // Only plmn should be shown. DiamaneOS: as it is, without the carrier's Wi-Fi calling
+        // formats.
         String plmn = mBundle.getStringArray(CarrierConfigManager.KEY_PNN_OVERRIDE_STRING_ARRAY)[0];
         plmn = plmn.split("\\s*,\\s*")[0];
         Bundle b = getExtrasFromLastSpnUpdateIntent();
-        assertThat(b.getString(TelephonyManager.EXTRA_PLMN))
-                .isEqualTo(String.format(WIFI_CALLING_VOICE_FORMAT, plmn));
+        assertThat(b.getString(TelephonyManager.EXTRA_PLMN)).isEqualTo(plmn);
         assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_PLMN)).isTrue();
         assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_SPN)).isFalse();
     }
@@ -3059,6 +3058,37 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         assertThat(b.getString(TelephonyManager.EXTRA_PLMN))
                 .isEqualTo(CARRIER_NAME_DISPLAY_NO_SERVICE);
         assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_PLMN)).isTrue();
+    }
+
+    @Test
+    public void testUpdateSpnDisplayLegacy_WifiCallingEnabled_showSpnWithoutWfcFormat() {
+        mBundle.putBoolean(
+                CarrierConfigManager.KEY_ENABLE_CARRIER_DISPLAY_NAME_RESOLVER_BOOL, false);
+        sendCarrierConfigUpdate(PHONE_ID);
+
+        // voice out of service but data in service (connected to IWLAN)
+        doReturn(ServiceState.STATE_OUT_OF_SERVICE).when(mServiceState).getState();
+        doReturn(ServiceState.STATE_IN_SERVICE).when(mServiceState).getDataRegistrationState();
+        doReturn(TelephonyManager.NETWORK_TYPE_IWLAN).when(mServiceState).getDataNetworkType();
+        sst.mSS = mServiceState;
+
+        // wifi-calling is enabled
+        doReturn(mImsPhone).when(mPhone).getImsPhone();
+        doReturn(true).when(mImsPhone).isWifiCallingEnabled();
+        doReturn(true).when(mPhone).isImsRegistered();
+
+        // update the spn
+        sst.updateCarrierDisplayName();
+
+        // DiamaneOS: only the spn is shown, as it is. The carrier's Wi-Fi calling formats that
+        // setUp() configures are not applied.
+        String spn = sst.getServiceProviderName();
+        assertThat(spn).isNotEmpty();
+        Bundle b = getExtrasFromLastSpnUpdateIntent();
+        assertThat(b.getString(TelephonyManager.EXTRA_SPN)).isEqualTo(spn);
+        assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_SPN)).isTrue();
+        assertThat(b.getString(TelephonyManager.EXTRA_DATA_SPN)).isEqualTo(spn);
+        assertThat(b.getBoolean(TelephonyManager.EXTRA_SHOW_PLMN)).isFalse();
     }
 
     @Test

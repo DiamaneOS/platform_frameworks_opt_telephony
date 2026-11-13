@@ -305,6 +305,41 @@ public class CarrierDisplayNameResolverTest extends TelephonyTest {
     }
 
     @Test
+    public void testWifiCalling_carrierFormatWithoutName_stillShowsSPN() {
+        // DiamaneOS: Vodafone DE's carrier config asks for format 12, the bare "WiFi Call". The
+        // SIM keeps its SPN while it is registered for Wi-Fi calling.
+        mConfig.putInt(CarrierConfigManager.KEY_WFC_SPN_FORMAT_IDX_INT, 12);
+        mConfig.putInt(CarrierConfigManager.KEY_WFC_DATA_SPN_FORMAT_IDX_INT, 12);
+        mConfig.putInt(CarrierConfigManager.KEY_WFC_FLIGHT_MODE_SPN_FORMAT_IDX_INT, 12);
+        doReturn(true).when(mPhone).isWifiCallingEnabled();
+        doReturn(true).when(mPhone).isImsRegistered();
+
+        CarrierDisplayNameData data = mCdnr.getCarrierDisplayNameData();
+        assertThat(data.getSpn()).isEqualTo(SPN_FROM_USIM);
+        assertThat(data.getDataSpn()).isEqualTo(SPN_FROM_USIM);
+        assertThat(data.shouldShowSpn()).isTrue();
+        assertThat(data.shouldShowPlmn()).isFalse();
+    }
+
+    @Test
+    public void testWifiCalling_noSPN_showsHomeNetworkNameWithoutFormat() {
+        // DiamaneOS: format 1 is "%s Wi-Fi Calling". Without an SPN the SIM shows the name of its
+        // home network, as it is.
+        mConfig.putInt(CarrierConfigManager.KEY_WFC_SPN_FORMAT_IDX_INT, 1);
+        doReturn(true).when(mPhone).isWifiCallingEnabled();
+        doReturn(true).when(mPhone).isImsRegistered();
+
+        SIMRecords usim = Mockito.mock(SIMRecords.class);
+        doReturn(PNN_HOME_NAME_FROM_USIM).when(usim).getPnnHomeName();
+        mCdnr.updateEfFromUsim(usim);
+
+        CarrierDisplayNameData data = mCdnr.getCarrierDisplayNameData();
+        assertThat(data.getPlmn()).isEqualTo(PNN_HOME_NAME_FROM_USIM);
+        assertThat(data.shouldShowPlmn()).isTrue();
+        assertThat(data.shouldShowSpn()).isFalse();
+    }
+
+    @Test
     public void testCarrierDisplayNameData_enforceNonNullDataSpn() {
         try {
             CarrierDisplayNameData cdnd = new CarrierDisplayNameData.Builder()
