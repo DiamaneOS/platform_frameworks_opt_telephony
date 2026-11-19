@@ -27,10 +27,10 @@ import com.android.telephony.Rlog;
 
 /**
  * DiamaneOS: offers a restart on the first boot after a clean install, where Wi-Fi calling failed
- * until a restart. That boot has fresh userdata and imeiprovd found the modem without IMEIs
- * ("reversed"). Updates keep userdata, and a factory reset finds the IMEIs in place. Shown once
- * and gone after the restart. Shown only with an active SIM: without one it waits for a SIM during
- * that boot.
+ * until a restart. That boot has fresh userdata and the device's IMEI provisioning
+ * (vendor.diamaneos.imei.status) found the modem without IMEIs ("reversed"). Updates keep
+ * userdata, and a factory reset finds the IMEIs in place. Shown once and gone after the restart.
+ * Shown only with an active SIM: without one it waits for a SIM during that boot.
  */
 public final class ImeiRestartNotice {
     private static final String TAG = "ImeiRestartNotice";
@@ -42,7 +42,7 @@ public final class ImeiRestartNotice {
     private static final String NOTIFICATION_TAG = "ImeiRestart";
     private static final int NOTIFICATION_ID = 1;
     private static final long RECHECK_MS = 5_000;
-    /** imeiprovd gives up on the modem well within this time after boot. */
+    /** The device's IMEI provisioning gives up on the modem well within this time after boot. */
     @VisibleForTesting
     static final long WAIT_LIMIT_MS = 180_000;
 
@@ -66,7 +66,7 @@ public final class ImeiRestartNotice {
             boolean shown, boolean simActive) {
         if (!firstBoot || shown) return Decision.NONE;
         if ("reversed".equals(status)) return simActive ? Decision.SHOW : Decision.WAIT_FOR_SIM;
-        // "running" until imeiprovd is done, empty until it starts.
+        // "running" until the device's IMEI provisioning is done, empty until it starts.
         boolean pending = status.isEmpty() || "running".equals(status);
         return pending && sinceBootMs < WAIT_LIMIT_MS ? Decision.WAIT : Decision.NONE;
     }

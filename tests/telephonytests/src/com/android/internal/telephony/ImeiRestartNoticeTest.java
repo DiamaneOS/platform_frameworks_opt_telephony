@@ -42,7 +42,7 @@ public class ImeiRestartNoticeTest {
     }
 
     @Test
-    public void waitsWhileImeiprovdRunsWithinTheLimit() {
+    public void waitsWhileProvisioningRunsWithinTheLimit() {
         assertEquals(WAIT, decide("running", true, 30_000, false, true));
         assertEquals(WAIT, decide("", true, 30_000, false, true));
         assertEquals(NONE, decide("running", true, WAIT_LIMIT_MS, false, true));
